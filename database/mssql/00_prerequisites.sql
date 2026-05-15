@@ -1,0 +1,17 @@
+USE [billing_application];
+GO
+
+IF OBJECT_ID(N'dbo.users', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.users (
+    id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY DEFAULT NEWID(),
+    email NVARCHAR(255) NOT NULL UNIQUE,
+    password_hash NVARCHAR(500) NOT NULL,
+    display_name NVARCHAR(255) NULL,
+    phone VARCHAR(20) NULL,
+    is_active BIT NOT NULL DEFAULT 1,
+    created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+    updated_at DATETIME2 NOT NULL DEFAULT GETDATE()
+  );
+END
+GO
