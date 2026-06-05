@@ -457,6 +457,12 @@ export const dashboardApi = {
   getLowStockItems: (page = 1) => api.get<any>(`/dashboard/low-stock?page=${page}&limit=5`),
 };
 
+// ===== SOFTWARE UPDATES =====
+export const softwareApi = {
+  getUpdates: () => api.get<any>("/software/updates"),
+  update: () => api.post<any>("/software/update", {}),
+};
+
 // ===== ITEM CATEGORIES =====
 export const itemCategoriesApi = {
   list: () => api.get<any[]>("/item-categories"),

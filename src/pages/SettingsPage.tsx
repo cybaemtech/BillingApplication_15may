@@ -7,13 +7,13 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { Building2, Users, Receipt, FileText, ArrowLeft, Trash2, Star, Edit2, ShieldCheck, CreditCard, Loader2, Database, Gauge, LockKeyhole, Shield, HardDriveDownload, UserCog, CircleDashed, Rocket, Monitor, Search, Plus } from "lucide-react";
-import { adminUsersApi, featureAccessApi, gstSettingsApi, taxRatesApi, documentSequencesApi, userRolesApi, companyApi, invoiceSettingsApi, subscriptionApi, customersApi, invoicesApi, rolesApi } from "@/lib/api";
+import { Building2, Users, Receipt, FileText, ArrowLeft, Trash2, Star, Edit2, ShieldCheck, CreditCard, Loader2, Database, Gauge, LockKeyhole, Shield, HardDriveDownload, UserCog, CircleDashed, Rocket, Monitor, Search, Plus, RefreshCcw } from "lucide-react";
+import { adminUsersApi, featureAccessApi, gstSettingsApi, taxRatesApi, documentSequencesApi, userRolesApi, companyApi, invoiceSettingsApi, subscriptionApi, customersApi, invoicesApi, rolesApi, softwareApi } from "@/lib/api";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import SubscriptionSaaSSection from "@/pages/settings/SubscriptionSaaSSection";
 
-type Section = null | "organization" | "users" | "taxes" | "invoice" | "subscription";
+type Section = null | "organization" | "users" | "taxes" | "invoice" | "subscription" | "software";
 
 declare global {
   interface Window {
@@ -56,6 +56,7 @@ export default function SettingsPage() {
         {!blockedForUser && section === "taxes" && <TaxesSection />}
         {section === "invoice" && <InvoiceSettingsSection />}
         {section === "subscription" && <SubscriptionSaaSSection />}
+        {section === "software" && <SoftwareSection />}
       </div>
     );
   }
@@ -66,6 +67,7 @@ export default function SettingsPage() {
     { key: "taxes" as Section, icon: Receipt, label: "Taxes", desc: "GST slabs and tax configuration" },
     { key: "invoice" as Section, icon: FileText, label: "Invoice Settings", desc: "Document numbering and prefixes" },
     { key: "subscription" as Section, icon: CreditCard, label: "Subscription & SaaS", desc: "Plans, billing, tenant readiness, security" },
+    { key: "software" as Section, icon: RefreshCcw, label: "Software Update", desc: "Check for core system updates" },
   ];
   const visibleSections = isAdmin
     ? sections
@@ -703,8 +705,8 @@ function UsersSection() {
             {isSuperAdmin
               ? "Super Admin can create companies, company admins, and manage team members."
               : isAdmin
-              ? "Company admins can add users, but cannot create another admin."
-              : "Only admins can add, edit, and delete users."}
+                ? "Company admins can add users, but cannot create another admin."
+                : "Only admins can add, edit, and delete users."}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -792,37 +794,37 @@ function UsersSection() {
                           const targetRole = String(r.role || "").toLowerCase();
                           const canManageRow = isSuperAdmin || targetRole !== "super_admin";
                           return (
-                        <tr key={r.id} className="border-b border-border last:border-0 hover:bg-muted/30">
-                          <td className="px-4 py-2.5 align-top">
-                            <input
-                              type="checkbox"
-                              checked={selectedCybaemUsers.includes(String(r.user_id))}
-                              disabled={String(r.user_id) === String(user?.id)}
-                              onChange={(e) => toggleCybaemtechSelection(String(r.user_id), e.target.checked)}
-                              className="h-4 w-4 rounded border-border"
-                            />
-                          </td>
-                          <td className="px-4 py-2.5">
-                            <div className="font-medium text-card-foreground">{r.display_name || r.username}</div>
-                            <div className="text-[10px] text-muted-foreground">{r.email}</div>
-                          </td>
-                          <td className="px-4 py-2.5 text-card-foreground capitalize">{r.role}</td>
-                          <td className="px-4 py-2.5">
-                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${r.is_active === false ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10 text-emerald-600"}`}>
-                              {r.is_active === false ? "Inactive" : "Active"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canManageRow} onClick={() => canManageRow && handleEditOpen(r)}>
-                                <Edit2 className="w-3.5 h-3.5" />
-                              </Button>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canManageRow || r.user_id === user?.id} onClick={() => { if (canManageRow && confirm("Delete user?")) deleteUserMutation.mutate(r.user_id); }}>
-                                <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
+                            <tr key={r.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                              <td className="px-4 py-2.5 align-top">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedCybaemUsers.includes(String(r.user_id))}
+                                  disabled={String(r.user_id) === String(user?.id)}
+                                  onChange={(e) => toggleCybaemtechSelection(String(r.user_id), e.target.checked)}
+                                  className="h-4 w-4 rounded border-border"
+                                />
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <div className="font-medium text-card-foreground">{r.display_name || r.username}</div>
+                                <div className="text-[10px] text-muted-foreground">{r.email}</div>
+                              </td>
+                              <td className="px-4 py-2.5 text-card-foreground capitalize">{r.role}</td>
+                              <td className="px-4 py-2.5">
+                                <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${r.is_active === false ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10 text-emerald-600"}`}>
+                                  {r.is_active === false ? "Inactive" : "Active"}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canManageRow} onClick={() => canManageRow && handleEditOpen(r)}>
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </Button>
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canManageRow || r.user_id === user?.id} onClick={() => { if (canManageRow && confirm("Delete user?")) deleteUserMutation.mutate(r.user_id); }}>
+                                    <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
                           );
                         })()
                       ))}
@@ -861,28 +863,28 @@ function UsersSection() {
                         const targetRole = String(r.role || "").toLowerCase();
                         const canManageRow = isSuperAdmin || targetRole !== "super_admin";
                         return (
-                      <tr key={r.id} className="border-b border-border last:border-0 hover:bg-muted/30">
-                        <td className="px-4 py-2.5">
-                          <div className="font-medium text-card-foreground">{r.display_name || r.username}</div>
-                          <div className="text-[10px] text-muted-foreground">{r.email}</div>
-                        </td>
-                        {isSuperAdmin && <td className="px-4 py-2.5 text-muted-foreground max-w-[120px] truncate">{r.company_name || "—"}</td>}
-                        <td className="px-4 py-2.5">
-                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${r.is_active === false ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10 text-emerald-600"}`}>
-                            {r.is_active === false ? "Inactive" : "Active"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canManageRow} onClick={() => canManageRow && handleEditOpen(r)}>
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canManageRow || r.user_id === user?.id} onClick={() => { if (canManageRow && confirm("Delete user?")) deleteUserMutation.mutate(r.user_id); }}>
-                              <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
+                          <tr key={r.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                            <td className="px-4 py-2.5">
+                              <div className="font-medium text-card-foreground">{r.display_name || r.username}</div>
+                              <div className="text-[10px] text-muted-foreground">{r.email}</div>
+                            </td>
+                            {isSuperAdmin && <td className="px-4 py-2.5 text-muted-foreground max-w-[120px] truncate">{r.company_name || "—"}</td>}
+                            <td className="px-4 py-2.5">
+                              <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${r.is_active === false ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10 text-emerald-600"}`}>
+                                {r.is_active === false ? "Inactive" : "Active"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canManageRow} onClick={() => canManageRow && handleEditOpen(r)}>
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </Button>
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={!canManageRow || r.user_id === user?.id} onClick={() => { if (canManageRow && confirm("Delete user?")) deleteUserMutation.mutate(r.user_id); }}>
+                                  <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
                         );
                       })()
                     ))}
@@ -977,7 +979,7 @@ function UsersSection() {
 
       {/* Add User Dialog (Used by both Company Admin and Super Admin team management) */}
       <Dialog open={addUserOpen} onOpenChange={setAddUserOpen}>
-          <DialogContent className="w-[min(92vw,56rem)] max-h-[85vh] overflow-y-auto">
+        <DialogContent className="w-[min(92vw,56rem)] max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add New User</DialogTitle>
             <DialogDescription>
@@ -1285,6 +1287,161 @@ function TaxSlabRow({ tax, onSetDefault, onToggleActive, onDelete, canEdit }: {
       </td>
     </tr>
   );
+}
+
+function SoftwareSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { userRole } = useAuth();
+  const normalizedRole = String(userRole || "").toUpperCase();
+  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+
+  const { data: updateInfo, isLoading, refetch, isRefetching } = useQuery({
+    queryKey: ["software_updates"],
+    queryFn: softwareApi.getUpdates,
+    enabled: isAdmin,
+    refetchOnWindowFocus: false,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: softwareApi.update,
+    onSuccess: () => {
+      toast({ title: "Update successful", description: "The system has been updated to the latest version." });
+      queryClient.invalidateQueries({ queryKey: ["software_updates"] });
+    },
+    onError: (err: any) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+  });
+
+  if (!isAdmin) return <div className="text-sm text-muted-foreground p-4 bg-muted/20 rounded-lg">Access module restricted to administrators.</div>;
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground font-display">Software Update</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Check for official updates and keep your system running with the latest features and security fixes.
+        </p>
+      </div>
+
+      <div className="bg-card border border-border rounded-2xl p-6 shadow-sm overflow-hidden relative">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 relative z-10">
+          <div className="flex items-start gap-4">
+            <div className={cn(
+              "p-3 rounded-xl transition-all duration-500",
+              updateInfo?.updateAvailable ? "bg-amber-500/10 text-amber-600" : "bg-primary/10 text-primary"
+            )}>
+              <RefreshCcw className={cn("w-6 h-6", (isRefetching || isLoading) && "animate-spin")} />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-card-foreground">System Version</h3>
+              <div className="mt-1 flex items-center gap-2">
+                <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                  {updateInfo?.current?.hash?.substring(0, 7) || "Fetching..."}
+                </span>
+                {updateInfo?.updateAvailable && (
+                  <StatusPill tone="amber">Action Required</StatusPill>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-2">
+                Last installed: {updateInfo?.current?.date ? new Date(updateInfo.current.date).toLocaleString() : "..."}
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => refetch()}
+            disabled={isRefetching || isLoading}
+          >
+            {isRefetching ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Search className="mr-2 h-3.5 w-3.5" />}
+            Check for Updates
+          </Button>
+        </div>
+
+        {updateInfo?.updateAvailable ? (
+          <div className="mt-8 animate-in fade-in slide-in-from-top-4 duration-500">
+            <div className="p-5 rounded-2xl bg-gradient-to-br from-amber-500/10 to-orange-500/5 border border-amber-500/20 relative overflow-hidden group">
+              <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                <Rocket className="w-24 h-24 rotate-12" />
+              </div>
+
+              <div className="relative z-10">
+                <div className="flex items-center gap-2 text-amber-700">
+                  <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
+                  <span className="text-sm font-bold uppercase tracking-wider">New Version Available</span>
+                </div>
+
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <p className="text-xs font-medium text-amber-800/70">Update Details:</p>
+                    <p className="mt-1 text-sm font-medium text-amber-900 line-clamp-2">
+                      {updateInfo.latest?.message || "Critical system updates and improvements."}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-4 text-[11px] text-amber-800/60 font-mono">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      {updateInfo.latest?.hash?.substring(0, 7)}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      {updateInfo.latest?.date ? new Date(updateInfo.latest.date).toLocaleDateString() : "Pending"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6 flex flex-col sm:flex-row gap-3">
+                  <Button
+                    className="bg-amber-600 hover:bg-amber-700 text-white border-0 shadow-lg shadow-amber-500/20"
+                    onClick={() => updateMutation.mutate()}
+                    disabled={updateMutation.isPending}
+                  >
+                    {updateMutation.isPending ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <HardDriveDownload className="mr-2 h-4 w-4" />
+                    )}
+                    {updateMutation.isPending ? "Installing..." : "Install Update Now"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : !isLoading && !isRefetching && (
+          <div className="mt-8 flex items-center gap-3 p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/10 text-emerald-700 animate-in fade-in duration-1000">
+            <div className="p-1.5 rounded-full bg-emerald-500/10">
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold">Everything looks good!</p>
+              <p className="text-[10px] opacity-80 mt-0.5">Your system is running the most recent production build.</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-border bg-muted/20 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 p-1 rounded bg-muted text-muted-foreground">
+            <Monitor className="w-3.5 h-3.5" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-foreground">Update Requirements</p>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              Updates require an active internet connection and write permissions to the application directory.
+              The application will automatically restart during the update process.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function cn(...inputs: any[]) {
+  return inputs.filter(Boolean).join(" ");
 }
 
 // ===== Invoice Settings =====

@@ -8,6 +8,10 @@ import { requireTenantContext } from "./middleware/tenantContext.js";
 import { requireFeatureAccess } from "./middleware/featureAccess.js";
 import { FEATURE_OPTIONS, getPlanFeatures, getTenantAllowedFeatures, getTenantRolePermissions, setPlanFeatures, setRolePermissions } from "./services/featureAccessService.js";
 import { getTenantSubscriptionContext, updateTenantPlan } from "./services/subscriptionService.js";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execPromise = promisify(exec);
 
 
 const router = Router();
@@ -2927,8 +2931,8 @@ router.post("/recurring-invoices", authenticate, requireTenantContext, async (re
     await db.query`INSERT INTO recurring_invoices (id, tenant_id, customer_id, frequency, start_date, end_date, next_invoice_date, base_invoice_id, is_active, subtotal, tax_amount, total, created_by, created_at)
       VALUES (${id}, ${tenantId}, ${customer_id}, ${frequency || 'monthly'}, ${start_date || today}, ${end_date || null}, ${next_invoice_date || today}, ${base_invoice_id || null}, ${is_active ?? true}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${req.user!.id}, GETDATE())`;
 
-      const dataResult = await db.query`SELECT ri.*, c.name as customer_name, CASE WHEN ri.is_active = 1 THEN 'active' ELSE 'inactive' END as status FROM recurring_invoices ri LEFT JOIN customers c ON ri.customer_id = c.id WHERE ri.id = ${id} AND ri.tenant_id = ${tenantId}`;
-      res.json(dataResult.recordset[0]);
+    const dataResult = await db.query`SELECT ri.*, c.name as customer_name, CASE WHEN ri.is_active = 1 THEN 'active' ELSE 'inactive' END as status FROM recurring_invoices ri LEFT JOIN customers c ON ri.customer_id = c.id WHERE ri.id = ${id} AND ri.tenant_id = ${tenantId}`;
+    res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
@@ -3816,8 +3820,8 @@ router.post("/recurring-invoices", authenticate, requireTenantContext, async (re
     await db.query`INSERT INTO recurring_invoices (id, tenant_id, customer_id, frequency, start_date, end_date, next_invoice_date, base_invoice_id, is_active, subtotal, tax_amount, total, created_by, created_at) 
       VALUES (${id}, ${tenantId}, ${customer_id}, ${frequency || 'monthly'}, ${start_date || today}, ${end_date || null}, ${next_invoice_date || today}, ${base_invoice_id || null}, ${is_active ?? true}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${req.user!.id}, GETDATE())`;
 
-      const docResult = await db.query`SELECT ri.*, c.name as customer_name, CASE WHEN ri.is_active = 1 THEN 'active' ELSE 'inactive' END as status FROM recurring_invoices ri LEFT JOIN customers c ON ri.customer_id = c.id WHERE ri.id = ${id} AND ri.tenant_id = ${tenantId}`;
-      res.json(docResult.recordset[0]);
+    const docResult = await db.query`SELECT ri.*, c.name as customer_name, CASE WHEN ri.is_active = 1 THEN 'active' ELSE 'inactive' END as status FROM recurring_invoices ri LEFT JOIN customers c ON ri.customer_id = c.id WHERE ri.id = ${id} AND ri.tenant_id = ${tenantId}`;
+    res.json(docResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
@@ -5255,7 +5259,7 @@ router.get("/subscription/organizations", authenticate, async (req: AuthRequest,
           role: user.role,
         }));
       const mergedUsers = [...companyUsers, ...creatorUsers.filter((creator: any) => !companyUsers.some((user: any) => user.id === creator.id))];
-      
+
       const tenantScopeId = company.tenant_id || company.id;
       const [customerCount, invoiceCount, billCount, vendorCount, itemCount, quotationCount, salesOrderCount, purchaseOrderCount, paymentReceivedCount, paymentMadeCount] = await Promise.all([
         db.query`SELECT COUNT(*) as total FROM customers WHERE tenant_id IN (${company.id}, ${tenantScopeId})`.then((result) => Number(result.recordset[0]?.total || 0)).catch(() => 0),
@@ -5600,6 +5604,70 @@ router.post("/billing/upgrade/confirm", authenticate, requireTenantContext, asyn
     const plan = await updateTenantPlan(tenantId, planName);
     res.json({ success: true, plan });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== SOFTWARE UPDATES =====
+router.get("/software/updates", authenticate, async (req: AuthRequest, res) => {
+  try {
+    // Only super admins or company admins can check for updates
+    if (!["admin", "SUPER_ADMIN"].includes(String(req.user?.role || ""))) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+
+    const execOptions = { cwd: process.cwd() };
+
+    // 1. Get current commit info
+    const { stdout: currentHash } = await execPromise("git rev-parse HEAD", execOptions);
+    const { stdout: currentDate } = await execPromise("git log -1 --format=%cd", execOptions);
+
+    // 2. Fetch latest from origin
+    try {
+      await execPromise("git fetch origin", execOptions);
+    } catch (fetchErr) {
+      console.error("Git fetch failed:", fetchErr);
+    }
+
+    // 3. Get status
+    const { stdout: status } = await execPromise("git status -uno", execOptions);
+    const isAhead = status.includes("behind");
+
+    // 4. Get remote commit info if ahead
+    let latestCommit = null;
+    if (isAhead) {
+      const { stdout: remoteInfo } = await execPromise("git log -1 origin/main --format=%H|%cd|%s", execOptions);
+      const parts = remoteInfo.trim().split("|");
+      latestCommit = {
+        hash: parts[0],
+        date: parts[1],
+        message: parts[2],
+      };
+    }
+
+    res.json({
+      current: {
+        hash: currentHash.trim(),
+        date: currentDate.trim(),
+      },
+      latest: latestCommit,
+      updateAvailable: isAhead,
+    });
+  } catch (e: any) {
+    console.error("Software update check error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post("/software/update", authenticate, async (req: AuthRequest, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+
+    const { stdout } = await execPromise("git pull origin main", { cwd: process.cwd() });
+    res.json({ success: true, output: stdout });
+  } catch (e: any) {
+    console.error("Software update error:", e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export default router;
