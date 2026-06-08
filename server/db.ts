@@ -360,7 +360,21 @@ async function ensureTenantIdColumns() {
     'purchase_orders',
     'quotations',
     'recurring_invoices',
-    'sales_orders'
+    'sales_orders',
+    'item_categories',
+    'price_lists',
+    'price_list_items',
+    'warehouses',
+    'warehouse_stock',
+    'inventory_adjustments',
+    'inventory_adjustment_items',
+    'stock_transfers',
+    'stock_transfer_items',
+    'stock_movements',
+    'pos_sessions',
+    'pos_orders',
+    'pos_order_items',
+    'pos_payments'
   ];
   
   for (const table of tables) {

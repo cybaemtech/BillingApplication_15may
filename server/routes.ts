@@ -177,6 +177,19 @@ function getTenantId(req: AuthRequest): string {
   return tenantId;
 }
 
+const TENANT_OWNED_TABLES = new Set(["customers", "items", "warehouses", "pos_sessions"]);
+
+async function assertTenantOwnership(table: string, id: string | null | undefined, tenantId: string, label: string) {
+  if (!id) return;
+  if (!TENANT_OWNED_TABLES.has(table)) throw new Error("Unsupported tenant ownership check");
+
+  const result = await runRawQuery(
+    `SELECT TOP 1 id FROM dbo.${table} WHERE id = @id AND tenant_id = @tenant_id`,
+    { id, tenant_id: tenantId }
+  );
+  if (!result.recordset[0]) throw new Error(`${label} does not belong to this organization`);
+}
+
 function getSubscriptionSections(plan: any) {
   return [
     {
@@ -528,62 +541,62 @@ async function generateDocNumber(docType: string): Promise<string> {
 
 // ===== HELPER: Update stock =====
 // ===== HELPER: Update stock =====
-async function updateStock(itemId: string, qty: number, movementType: any, refId: string, refType: string, cost: number = 0, userId?: string) {
-  const itemResult = await db.query`SELECT * FROM items WHERE id = ${itemId}`;
+async function updateStock(tenantId: string, itemId: string, qty: number, movementType: any, refId: string, refType: string, cost: number = 0, userId?: string) {
+  const itemResult = await db.query`SELECT * FROM items WHERE id = ${itemId} AND tenant_id = ${tenantId}`;
   const item = itemResult.recordset[0];
-  if (!item) return;
+  if (!item) throw new Error("Item not found in this organization");
   const isInflow = ["purchase", "vendor_credit", "in"].includes(movementType);
   const newStock = Number(item.current_stock) + (isInflow ? qty : -qty);
   const effectiveCost = Number(cost || item.purchase_rate || 0);
-  await db.query`UPDATE items SET current_stock = ${newStock} WHERE id = ${itemId}`;
+  await db.query`UPDATE items SET current_stock = ${newStock} WHERE id = ${itemId} AND tenant_id = ${tenantId}`;
   const movementId = uuidv4();
-  await db.query`INSERT INTO stock_movements (id, item_id, movement_type, quantity, cost_price, reference_id, reference_type, created_by, created_at) 
-    VALUES (${movementId}, ${itemId}, ${movementType}, ${qty}, ${effectiveCost}, ${refId}, ${refType}, ${userId || null}, GETDATE())`;
+  await db.query`INSERT INTO stock_movements (id, tenant_id, item_id, movement_type, quantity, cost_price, reference_id, reference_type, created_by, created_at)
+    VALUES (${movementId}, ${tenantId}, ${itemId}, ${movementType}, ${qty}, ${effectiveCost}, ${refId}, ${refType}, ${userId || null}, GETDATE())`;
 }
 
-async function adjustWarehouseStock(warehouseId: string | null | undefined, itemId: string, delta: number) {
+async function adjustWarehouseStock(tenantId: string, warehouseId: string | null | undefined, itemId: string, delta: number) {
   if (!warehouseId || !itemId || !Number.isFinite(delta) || delta === 0) return;
 
   const existing = await db.query`
     SELECT TOP 1 * FROM warehouse_stock
-    WHERE warehouse_id = ${warehouseId} AND item_id = ${itemId}
+    WHERE warehouse_id = ${warehouseId} AND item_id = ${itemId} AND tenant_id = ${tenantId}
   `.then((result) => result.recordset[0]);
 
   if (existing) {
     await db.query`
       UPDATE warehouse_stock
       SET quantity = ${Number(existing.quantity || 0) + delta}, updated_at = GETDATE()
-      WHERE id = ${existing.id}
+      WHERE id = ${existing.id} AND tenant_id = ${tenantId}
     `;
     return;
   }
 
   await db.query`
-    INSERT INTO warehouse_stock (id, warehouse_id, item_id, quantity, updated_at)
-    VALUES (${uuidv4()}, ${warehouseId}, ${itemId}, ${delta}, GETDATE())
+    INSERT INTO warehouse_stock (id, tenant_id, warehouse_id, item_id, quantity, updated_at)
+    VALUES (${uuidv4()}, ${tenantId}, ${warehouseId}, ${itemId}, ${delta}, GETDATE())
   `;
 }
 
-async function setWarehouseStock(warehouseId: string | null | undefined, itemId: string, quantity: number) {
+async function setWarehouseStock(tenantId: string, warehouseId: string | null | undefined, itemId: string, quantity: number) {
   if (!warehouseId || !itemId || !Number.isFinite(quantity)) return;
 
   const existing = await db.query`
     SELECT TOP 1 * FROM warehouse_stock
-    WHERE warehouse_id = ${warehouseId} AND item_id = ${itemId}
+    WHERE warehouse_id = ${warehouseId} AND item_id = ${itemId} AND tenant_id = ${tenantId}
   `.then((result) => result.recordset[0]);
 
   if (existing) {
     await db.query`
       UPDATE warehouse_stock
       SET quantity = ${quantity}, updated_at = GETDATE()
-      WHERE id = ${existing.id}
+      WHERE id = ${existing.id} AND tenant_id = ${tenantId}
     `;
     return;
   }
 
   await db.query`
-    INSERT INTO warehouse_stock (id, warehouse_id, item_id, quantity, updated_at)
-    VALUES (${uuidv4()}, ${warehouseId}, ${itemId}, ${quantity}, GETDATE())
+    INSERT INTO warehouse_stock (id, tenant_id, warehouse_id, item_id, quantity, updated_at)
+    VALUES (${uuidv4()}, ${tenantId}, ${warehouseId}, ${itemId}, ${quantity}, GETDATE())
   `;
 }
 
@@ -1182,7 +1195,7 @@ router.get("/items/:id", authenticate, requireTenantContext, async (req: AuthReq
     if (!data) { res.status(404).json({ error: "Not found" }); return; }
 
     const [stockResult, salesHistoryResult, purchaseHistoryResult] = await Promise.all([
-      db.query`SELECT * FROM stock_movements WHERE item_id = ${itemId} ORDER BY created_at DESC`,
+      db.query`SELECT * FROM stock_movements WHERE item_id = ${itemId} AND tenant_id = ${tenantId} ORDER BY created_at DESC`,
       db.query`
         SELECT TOP 20
           inv.id as document_id,
@@ -1196,9 +1209,9 @@ router.get("/items/:id", authenticate, requireTenantContext, async (req: AuthReq
           ii.amount,
           (COALESCE(ii.amount, 0) + COALESCE(ii.tax_amount, 0)) as line_total
         FROM invoice_items ii
-        INNER JOIN invoices inv ON ii.invoice_id = inv.id
-        LEFT JOIN customers c ON inv.customer_id = c.id
-        WHERE ii.item_id = ${itemId}
+        INNER JOIN invoices inv ON ii.invoice_id = inv.id AND inv.tenant_id = ${tenantId}
+        LEFT JOIN customers c ON inv.customer_id = c.id AND c.tenant_id = ${tenantId}
+        WHERE ii.item_id = ${itemId} AND ii.tenant_id = ${tenantId}
         ORDER BY inv.date DESC, inv.created_at DESC
       `,
       db.query`
@@ -1214,9 +1227,9 @@ router.get("/items/:id", authenticate, requireTenantContext, async (req: AuthReq
           bi.amount,
           (COALESCE(bi.amount, 0) + COALESCE(bi.tax_amount, 0)) as line_total
         FROM bill_items bi
-        INNER JOIN bills b ON bi.bill_id = b.id
-        LEFT JOIN vendors v ON b.vendor_id = v.id
-        WHERE bi.item_id = ${itemId}
+        INNER JOIN bills b ON bi.bill_id = b.id AND b.tenant_id = ${tenantId}
+        LEFT JOIN vendors v ON b.vendor_id = v.id AND v.tenant_id = ${tenantId}
+        WHERE bi.item_id = ${itemId} AND bi.tenant_id = ${tenantId}
         ORDER BY b.date DESC, b.created_at DESC
       `, { tenant_id: tenantId }
     ]);
@@ -1238,30 +1251,34 @@ router.post("/items", authenticate, requireTenantContext, requireFeatureAccess("
     const current_stock = opening_stock || 0;
     await db.query`INSERT INTO items (id, tenant_id, name, sku, hsn_code, category, unit, purchase_rate, selling_rate, tax_rate_id, opening_stock, current_stock, reorder_level, is_active, created_by, created_at, updated_at) 
       VALUES (${id}, ${tenantId}, ${name}, ${sku || null}, ${hsn_code || null}, ${category || null}, ${unit || null}, ${purchase_rate || 0}, ${selling_rate || 0}, ${tax_rate_id || null}, ${opening_stock || 0}, ${current_stock}, ${reorder_level || 0}, ${is_active ?? true}, ${req.user!.id}, GETDATE(), GETDATE())`;
-    const dataResult = await db.query`SELECT * FROM items WHERE id = ${id}`;
+    const dataResult = await db.query`SELECT * FROM items WHERE id = ${id} AND tenant_id = ${tenantId}`;
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.put("/items/:id", authenticate, async (req, res) => {
+router.put("/items/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.items"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const { name, sku, hsn_code, category, unit, purchase_rate, selling_rate, tax_rate_id, current_stock, reorder_level, is_active } = req.body;
-    await db.query`UPDATE items SET name = COALESCE(${name}, name), sku = COALESCE(${sku}, sku), hsn_code = COALESCE(${hsn_code}, hsn_code), category = COALESCE(${category}, category), unit = COALESCE(${unit}, unit), purchase_rate = COALESCE(${purchase_rate}, purchase_rate), selling_rate = COALESCE(${selling_rate}, selling_rate), tax_rate_id = COALESCE(${tax_rate_id}, tax_rate_id), current_stock = COALESCE(${current_stock}, current_stock), reorder_level = COALESCE(${reorder_level}, reorder_level), is_active = COALESCE(${is_active}, is_active), updated_at = GETDATE() WHERE id = ${req.params.id}`;
-    const dataResult = await db.query`SELECT * FROM items WHERE id = ${req.params.id}`;
+    await db.query`UPDATE items SET name = COALESCE(${name}, name), sku = COALESCE(${sku}, sku), hsn_code = COALESCE(${hsn_code}, hsn_code), category = COALESCE(${category}, category), unit = COALESCE(${unit}, unit), purchase_rate = COALESCE(${purchase_rate}, purchase_rate), selling_rate = COALESCE(${selling_rate}, selling_rate), tax_rate_id = COALESCE(${tax_rate_id}, tax_rate_id), current_stock = COALESCE(${current_stock}, current_stock), reorder_level = COALESCE(${reorder_level}, reorder_level), is_active = COALESCE(${is_active}, is_active), updated_at = GETDATE() WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
+    const dataResult = await db.query`SELECT * FROM items WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
+    if (!dataResult.recordset[0]) { res.status(404).json({ error: "Not found" }); return; }
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.delete("/items/:id", authenticate, async (req, res) => {
+router.delete("/items/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.items"), async (req: AuthRequest, res) => {
   try {
-    await db.query`DELETE FROM items WHERE id = ${req.params.id}`;
+    const tenantId = getTenantId(req);
+    await db.query`DELETE FROM items WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/items/:id/stock", authenticate, async (req, res) => {
+router.get("/items/:id/stock", authenticate, requireTenantContext, requireFeatureAccess("inventory.stock_ledger"), async (req: AuthRequest, res) => {
   try {
-    const dataResult = await db.query`SELECT * FROM stock_movements WHERE item_id = ${req.params.id} ORDER BY created_at DESC`;
+    const tenantId = getTenantId(req);
+    const dataResult = await db.query`SELECT * FROM stock_movements WHERE item_id = ${req.params.id} AND tenant_id = ${tenantId} ORDER BY created_at DESC`;
     res.json(dataResult.recordset);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
@@ -1512,8 +1529,9 @@ router.delete("/accounts/:id", authenticate, requireTenantContext, async (req: A
 
 
 // ===== STOCK MOVEMENTS =====
-router.get("/stock-movements", authenticate, async (req, res) => {
+router.get("/stock-movements", authenticate, requireTenantContext, requireFeatureAccess("inventory.stock_ledger"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     await sendPaginatedResults(req, res, `
       SELECT
         sm.*,
@@ -1522,14 +1540,16 @@ router.get("/stock-movements", authenticate, async (req, res) => {
         i.unit AS item_unit,
         CASE WHEN ISNULL(sm.cost_price, 0) = 0 THEN ISNULL(i.purchase_rate, 0) ELSE sm.cost_price END AS effective_cost
       FROM stock_movements sm
-      LEFT JOIN items i ON sm.item_id = i.id
+      LEFT JOIN items i ON sm.item_id = i.id AND i.tenant_id = @tenant_id
+      WHERE sm.tenant_id = @tenant_id
       ORDER BY sm.created_at DESC
-    `, `SELECT COUNT(*) as total FROM stock_movements`);
+    `, `SELECT COUNT(*) as total FROM stock_movements WHERE tenant_id = @tenant_id`, { tenant_id: tenantId });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/stock-movements/:id", authenticate, async (req, res) => {
+router.get("/stock-movements/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.stock_ledger"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const movement = await db.query`
       SELECT
         sm.*,
@@ -1539,8 +1559,8 @@ router.get("/stock-movements/:id", authenticate, async (req, res) => {
         i.purchase_rate,
         CASE WHEN ISNULL(sm.cost_price, 0) = 0 THEN ISNULL(i.purchase_rate, 0) ELSE sm.cost_price END AS effective_cost
       FROM stock_movements sm
-      LEFT JOIN items i ON sm.item_id = i.id
-      WHERE sm.id = ${req.params.id}
+      LEFT JOIN items i ON sm.item_id = i.id AND i.tenant_id = ${tenantId}
+      WHERE sm.id = ${req.params.id} AND sm.tenant_id = ${tenantId}
     `.then((result) => result.recordset[0]);
     if (!movement) { res.status(404).json({ error: "Not found" }); return; }
     res.json(movement);
@@ -2320,15 +2340,17 @@ router.post("/activity-logs", authenticate, async (req: AuthRequest, res) => {
 });
 
 // ===== ITEM CATEGORIES =====
-router.get("/item-categories", authenticate, requireTenantContext, requireFeatureAccess("inventory.categories"), async (req, res) => {
+router.get("/item-categories", authenticate, requireTenantContext, requireFeatureAccess("inventory.categories"), async (req: AuthRequest, res) => {
   try {
-    await sendPaginatedResults(req, res, `SELECT * FROM item_categories ORDER BY name`, `SELECT COUNT(*) as total FROM item_categories`);
+    const tenantId = getTenantId(req);
+    await sendPaginatedResults(req, res, `SELECT * FROM item_categories WHERE tenant_id = @tenant_id ORDER BY name`, `SELECT COUNT(*) as total FROM item_categories WHERE tenant_id = @tenant_id`, { tenant_id: tenantId });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/item-categories/:id", authenticate, async (req, res) => {
+router.get("/item-categories/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.categories"), async (req: AuthRequest, res) => {
   try {
-    const categoryResult = await db.query`SELECT * FROM item_categories WHERE id = ${req.params.id}`;
+    const tenantId = getTenantId(req);
+    const categoryResult = await db.query`SELECT * FROM item_categories WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
     const category = categoryResult.recordset[0];
     if (!category) {
       res.status(404).json({ error: "Not found" });
@@ -2349,7 +2371,7 @@ router.get("/item-categories/:id", authenticate, async (req, res) => {
         i.is_active,
         i.created_at
       FROM items i
-      WHERE i.category = ${category.name}
+      WHERE i.category = ${category.name} AND i.tenant_id = ${tenantId}
       ORDER BY i.created_at DESC, i.name ASC
     `.then((result) => result.recordset);
 
@@ -2361,40 +2383,45 @@ router.get("/item-categories/:id", authenticate, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.post("/item-categories", authenticate, requireTenantContext, requireFeatureAccess("inventory.categories"), async (req, res) => {
+router.post("/item-categories", authenticate, requireTenantContext, requireFeatureAccess("inventory.categories"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const id = uuidv4();
     const { name, description } = req.body;
-    await db.query`INSERT INTO item_categories (id, name, description, created_at) VALUES (${id}, ${name}, ${description || null}, GETDATE())`;
-    const dataResult = await db.query`SELECT * FROM item_categories WHERE id = ${id}`;
+    await db.query`INSERT INTO item_categories (id, tenant_id, name, description, created_at) VALUES (${id}, ${tenantId}, ${name}, ${description || null}, GETDATE())`;
+    const dataResult = await db.query`SELECT * FROM item_categories WHERE id = ${id} AND tenant_id = ${tenantId}`;
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.delete("/item-categories/:id", authenticate, async (req, res) => {
+router.delete("/item-categories/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.categories"), async (req: AuthRequest, res) => {
   try {
-    await db.query`DELETE FROM item_categories WHERE id = ${req.params.id}`;
+    const tenantId = getTenantId(req);
+    await db.query`DELETE FROM item_categories WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== PRICE LISTS =====
-router.get("/price-lists", authenticate, async (req, res) => {
+router.get("/price-lists", authenticate, requireTenantContext, requireFeatureAccess("inventory.price_lists"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     await sendPaginatedResults(req, res, `
       SELECT
         pl.*,
-        COALESCE((SELECT COUNT(*) FROM price_list_items pli WHERE pli.price_list_id = pl.id), 0) as item_count
+        COALESCE((SELECT COUNT(*) FROM price_list_items pli WHERE pli.price_list_id = pl.id AND pli.tenant_id = @tenant_id), 0) as item_count
       FROM price_lists pl
+      WHERE pl.tenant_id = @tenant_id
       ORDER BY pl.name
-    `, `SELECT COUNT(*) as total FROM price_lists`);
+    `, `SELECT COUNT(*) as total FROM price_lists WHERE tenant_id = @tenant_id`, { tenant_id: tenantId });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/price-lists/:id", authenticate, async (req, res) => {
+router.get("/price-lists/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.price_lists"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const priceList = await db.query`
-      SELECT * FROM price_lists WHERE id = ${req.params.id}
+      SELECT * FROM price_lists WHERE id = ${req.params.id} AND tenant_id = ${tenantId}
     `.then((result) => result.recordset[0]);
     if (!priceList) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -2407,8 +2434,8 @@ router.get("/price-lists/:id", authenticate, async (req, res) => {
         i.purchase_rate,
         i.current_stock
       FROM price_list_items pli
-      LEFT JOIN items i ON pli.item_id = i.id
-      WHERE pli.price_list_id = ${req.params.id}
+      LEFT JOIN items i ON pli.item_id = i.id AND i.tenant_id = ${tenantId}
+      WHERE pli.price_list_id = ${req.params.id} AND pli.tenant_id = ${tenantId}
       ORDER BY i.name ASC
     `.then((result) => result.recordset);
 
@@ -2416,52 +2443,65 @@ router.get("/price-lists/:id", authenticate, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.post("/price-lists", authenticate, async (req, res) => {
+router.post("/price-lists", authenticate, requireTenantContext, requireFeatureAccess("inventory.price_lists"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const id = uuidv4();
     const { name, description, is_active, items } = req.body;
-    await db.query`INSERT INTO price_lists (id, name, description, is_active, created_at, updated_at) VALUES (${id}, ${name}, ${description || null}, ${is_active ?? true}, GETDATE(), GETDATE())`;
+    await db.query`INSERT INTO price_lists (id, tenant_id, name, description, is_active, created_at, updated_at) VALUES (${id}, ${tenantId}, ${name}, ${description || null}, ${is_active ?? true}, GETDATE(), GETDATE())`;
     if (items && Array.isArray(items)) {
       for (const item of items) {
-        await db.query`INSERT INTO price_list_items (id, price_list_id, item_id, rate) VALUES (${uuidv4()}, ${id}, ${item.item_id}, ${item.rate_or_percentage || item.rate || 0})`;
+        const insertResult = await db.query`
+          INSERT INTO price_list_items (id, tenant_id, price_list_id, item_id, rate)
+          SELECT ${uuidv4()}, ${tenantId}, ${id}, i.id, ${item.rate_or_percentage || item.rate || 0}
+          FROM items i
+          WHERE i.id = ${item.item_id} AND i.tenant_id = ${tenantId}
+        `;
+        if (!insertResult.rowsAffected[0]) throw new Error("Price list item does not belong to this organization");
       }
     }
-    const dataResult = await db.query`SELECT * FROM price_lists WHERE id = ${id}`;
+    const dataResult = await db.query`SELECT * FROM price_lists WHERE id = ${id} AND tenant_id = ${tenantId}`;
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.delete("/price-lists/:id", authenticate, async (req, res) => {
+router.delete("/price-lists/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.price_lists"), async (req: AuthRequest, res) => {
   try {
-    await db.query`DELETE FROM price_list_items WHERE price_list_id = ${req.params.id}`;
-    await db.query`DELETE FROM price_lists WHERE id = ${req.params.id}`;
+    const tenantId = getTenantId(req);
+    const owned = await db.query`SELECT id FROM price_lists WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
+    if (!owned.recordset[0]) { res.status(404).json({ error: "Not found" }); return; }
+    await db.query`DELETE FROM price_list_items WHERE price_list_id = ${req.params.id} AND tenant_id = ${tenantId}`;
+    await db.query`DELETE FROM price_lists WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== WAREHOUSES =====
-router.get("/warehouses", authenticate, async (req, res) => {
+router.get("/warehouses", authenticate, requireTenantContext, requireFeatureAccess("inventory.warehouses"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     await sendPaginatedResults(req, res, `
       SELECT
         w.*,
-        COALESCE((SELECT COUNT(*) FROM stock_transfers st WHERE st.from_warehouse_id = w.id OR st.to_warehouse_id = w.id), 0) as transfer_count,
-        COALESCE((SELECT COUNT(*) FROM inventory_adjustments ia WHERE ia.warehouse_id = w.id), 0) as adjustment_count
+        COALESCE((SELECT COUNT(*) FROM stock_transfers st WHERE (st.from_warehouse_id = w.id OR st.to_warehouse_id = w.id) AND st.tenant_id = @tenant_id), 0) as transfer_count,
+        COALESCE((SELECT COUNT(*) FROM inventory_adjustments ia WHERE ia.warehouse_id = w.id AND ia.tenant_id = @tenant_id), 0) as adjustment_count
       FROM warehouses w
+      WHERE w.tenant_id = @tenant_id
       ORDER BY w.warehouse_name
-    `, `SELECT COUNT(*) as total FROM warehouses`);
+    `, `SELECT COUNT(*) as total FROM warehouses WHERE tenant_id = @tenant_id`, { tenant_id: tenantId });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/warehouses/:id", authenticate, async (req, res) => {
+router.get("/warehouses/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.warehouses"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const warehouse = await db.query`
       SELECT
         w.*,
-        COALESCE((SELECT COUNT(*) FROM stock_transfers st WHERE st.from_warehouse_id = w.id OR st.to_warehouse_id = w.id), 0) as transfer_count,
-        COALESCE((SELECT COUNT(*) FROM inventory_adjustments ia WHERE ia.warehouse_id = w.id), 0) as adjustment_count
+        COALESCE((SELECT COUNT(*) FROM stock_transfers st WHERE (st.from_warehouse_id = w.id OR st.to_warehouse_id = w.id) AND st.tenant_id = ${tenantId}), 0) as transfer_count,
+        COALESCE((SELECT COUNT(*) FROM inventory_adjustments ia WHERE ia.warehouse_id = w.id AND ia.tenant_id = ${tenantId}), 0) as adjustment_count
       FROM warehouses w
-      WHERE w.id = ${req.params.id}
+      WHERE w.id = ${req.params.id} AND w.tenant_id = ${tenantId}
     `.then((result) => result.recordset[0]);
     if (!warehouse) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -2473,8 +2513,8 @@ router.get("/warehouses/:id", authenticate, async (req, res) => {
           i.sku,
           i.unit
         FROM warehouse_stock ws
-        LEFT JOIN items i ON ws.item_id = i.id
-        WHERE ws.warehouse_id = ${req.params.id}
+        LEFT JOIN items i ON ws.item_id = i.id AND i.tenant_id = ${tenantId}
+        WHERE ws.warehouse_id = ${req.params.id} AND ws.tenant_id = ${tenantId}
         ORDER BY i.name ASC
       `.then((result) => result.recordset),
       db.query`
@@ -2483,14 +2523,15 @@ router.get("/warehouses/:id", authenticate, async (req, res) => {
           fw.warehouse_name as from_warehouse_name,
           tw.warehouse_name as to_warehouse_name
         FROM stock_transfers st
-        LEFT JOIN warehouses fw ON st.from_warehouse_id = fw.id
-        LEFT JOIN warehouses tw ON st.to_warehouse_id = tw.id
-        WHERE st.from_warehouse_id = ${req.params.id} OR st.to_warehouse_id = ${req.params.id}
+        LEFT JOIN warehouses fw ON st.from_warehouse_id = fw.id AND fw.tenant_id = ${tenantId}
+        LEFT JOIN warehouses tw ON st.to_warehouse_id = tw.id AND tw.tenant_id = ${tenantId}
+        WHERE (st.from_warehouse_id = ${req.params.id} OR st.to_warehouse_id = ${req.params.id})
+          AND st.tenant_id = ${tenantId}
         ORDER BY st.created_at DESC
       `.then((result) => result.recordset),
       db.query`
         SELECT TOP 20 * FROM inventory_adjustments
-        WHERE warehouse_id = ${req.params.id}
+        WHERE warehouse_id = ${req.params.id} AND tenant_id = ${tenantId}
         ORDER BY created_at DESC
       `.then((result) => result.recordset),
     ]);
@@ -2499,8 +2540,9 @@ router.get("/warehouses/:id", authenticate, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.post("/warehouses", authenticate, async (req, res) => {
+router.post("/warehouses", authenticate, requireTenantContext, requireFeatureAccess("inventory.warehouses"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const id = uuidv4();
     const warehouseName = req.body.warehouse_name || req.body.warehouseName || req.body.name;
     const { address, branch_id, is_active } = req.body;
@@ -2509,43 +2551,47 @@ router.post("/warehouses", authenticate, async (req, res) => {
       return res.status(400).json({ error: "warehouse_name is required" });
     }
 
-    await db.query`INSERT INTO warehouses (id, warehouse_name, address, branch_id, is_active, created_at) VALUES (${id}, ${warehouseName}, ${address || null}, ${branch_id || null}, ${is_active ?? true}, GETDATE())`;
-    const dataResult = await db.query`SELECT * FROM warehouses WHERE id = ${id}`;
+    await db.query`INSERT INTO warehouses (id, tenant_id, warehouse_name, address, branch_id, is_active, created_at) VALUES (${id}, ${tenantId}, ${warehouseName}, ${address || null}, ${branch_id || null}, ${is_active ?? true}, GETDATE())`;
+    const dataResult = await db.query`SELECT * FROM warehouses WHERE id = ${id} AND tenant_id = ${tenantId}`;
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.delete("/warehouses/:id", authenticate, async (req, res) => {
+router.delete("/warehouses/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.warehouses"), async (req: AuthRequest, res) => {
   try {
-    await db.query`DELETE FROM warehouses WHERE id = ${req.params.id}`;
+    const tenantId = getTenantId(req);
+    await db.query`DELETE FROM warehouses WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== INVENTORY ADJUSTMENTS =====
-router.get("/inventory-adjustments", authenticate, async (req, res) => {
+router.get("/inventory-adjustments", authenticate, requireTenantContext, requireFeatureAccess("inventory.adjustments"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     await sendPaginatedResults(req, res, `
       SELECT
         ia.*,
         w.warehouse_name,
-        COALESCE((SELECT COUNT(*) FROM inventory_adjustment_items iai WHERE iai.adjustment_id = ia.id), 0) as item_count
+        COALESCE((SELECT COUNT(*) FROM inventory_adjustment_items iai WHERE iai.adjustment_id = ia.id AND iai.tenant_id = @tenant_id), 0) as item_count
       FROM inventory_adjustments ia
-      LEFT JOIN warehouses w ON ia.warehouse_id = w.id
+      LEFT JOIN warehouses w ON ia.warehouse_id = w.id AND w.tenant_id = @tenant_id
+      WHERE ia.tenant_id = @tenant_id
       ORDER BY ia.created_at DESC
-    `, `SELECT COUNT(*) as total FROM inventory_adjustments`);
+    `, `SELECT COUNT(*) as total FROM inventory_adjustments WHERE tenant_id = @tenant_id`, { tenant_id: tenantId });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/inventory-adjustments/:id", authenticate, async (req, res) => {
+router.get("/inventory-adjustments/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.adjustments"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const adjustment = await db.query`
       SELECT
         ia.*,
         w.warehouse_name
       FROM inventory_adjustments ia
-      LEFT JOIN warehouses w ON ia.warehouse_id = w.id
-      WHERE ia.id = ${req.params.id}
+      LEFT JOIN warehouses w ON ia.warehouse_id = w.id AND w.tenant_id = ${tenantId}
+      WHERE ia.id = ${req.params.id} AND ia.tenant_id = ${tenantId}
     `.then((result) => result.recordset[0]);
     if (!adjustment) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -2556,8 +2602,8 @@ router.get("/inventory-adjustments/:id", authenticate, async (req, res) => {
         i.sku,
         i.unit
       FROM inventory_adjustment_items iai
-      LEFT JOIN items i ON iai.item_id = i.id
-      WHERE iai.adjustment_id = ${req.params.id}
+      LEFT JOIN items i ON iai.item_id = i.id AND i.tenant_id = ${tenantId}
+      WHERE iai.adjustment_id = ${req.params.id} AND iai.tenant_id = ${tenantId}
       ORDER BY i.name ASC
     `.then((result) => result.recordset);
 
@@ -2565,8 +2611,9 @@ router.get("/inventory-adjustments/:id", authenticate, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.post("/inventory-adjustments", authenticate, async (req: AuthRequest, res) => {
+router.post("/inventory-adjustments", authenticate, requireTenantContext, requireFeatureAccess("inventory.adjustments"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const { items: lineItems, ...adj } = req.body;
     const id = uuidv4();
     const documentNumber = adj.document_number || adj.documentNumber || adj.reference_number;
@@ -2576,8 +2623,13 @@ router.post("/inventory-adjustments", authenticate, async (req: AuthRequest, res
       return res.status(400).json({ error: "document_number is required" });
     }
 
-    await db.query`INSERT INTO inventory_adjustments (id, document_number, date, reason, status, warehouse_id, created_by, created_at, updated_at) 
-      VALUES (${id}, ${documentNumber}, ${adjustmentDate}, ${adj.reason || null}, ${adj.status || 'draft'}, ${adj.warehouse_id || null}, ${req.user!.id}, GETDATE(), GETDATE())`;
+    await assertTenantOwnership("warehouses", adj.warehouse_id, tenantId, "Warehouse");
+    for (const item of lineItems || []) {
+      await assertTenantOwnership("items", item.item_id, tenantId, "Item");
+    }
+
+    await db.query`INSERT INTO inventory_adjustments (id, tenant_id, document_number, date, reason, status, warehouse_id, created_by, created_at, updated_at)
+      VALUES (${id}, ${tenantId}, ${documentNumber}, ${adjustmentDate}, ${adj.reason || null}, ${adj.status || 'draft'}, ${adj.warehouse_id || null}, ${req.user!.id}, GETDATE(), GETDATE())`;
     if (lineItems?.length > 0) {
       for (const item of lineItems) {
         const itemId = uuidv4();
@@ -2587,48 +2639,51 @@ router.post("/inventory-adjustments", authenticate, async (req: AuthRequest, res
         const movementType = difference >= 0 ? 'in' : 'out';
         const movementCost = Number(item.cost_price ?? 0);
 
-        await db.query`INSERT INTO inventory_adjustment_items (id, adjustment_id, item_id, quantity_on_hand, adjusted_quantity, difference, cost_price) 
-          VALUES (${itemId}, ${id}, ${item.item_id}, ${quantityOnHand}, ${adjustedQuantity}, ${difference}, ${item.cost_price || 0})`;
+        await db.query`INSERT INTO inventory_adjustment_items (id, tenant_id, adjustment_id, item_id, quantity_on_hand, adjusted_quantity, difference, cost_price)
+          VALUES (${itemId}, ${tenantId}, ${id}, ${item.item_id}, ${quantityOnHand}, ${adjustedQuantity}, ${difference}, ${item.cost_price || 0})`;
 
         if (difference !== 0) {
-          await updateStock(item.item_id, Math.abs(difference), movementType, id, 'Inventory Adjustment', movementCost);
-          await setWarehouseStock(adj.warehouse_id || null, item.item_id, adjustedQuantity);
+          await updateStock(tenantId, item.item_id, Math.abs(difference), movementType, id, 'Inventory Adjustment', movementCost, req.user!.id);
+          await setWarehouseStock(tenantId, adj.warehouse_id || null, item.item_id, adjustedQuantity);
         }
       }
     }
-    const dataResult = await db.query`SELECT * FROM inventory_adjustments WHERE id = ${id}`;
+    const dataResult = await db.query`SELECT * FROM inventory_adjustments WHERE id = ${id} AND tenant_id = ${tenantId}`;
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== STOCK TRANSFERS =====
-router.get("/stock-transfers", authenticate, async (req, res) => {
+router.get("/stock-transfers", authenticate, requireTenantContext, requireFeatureAccess("inventory.stock_transfers"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     await sendPaginatedResults(req, res, `
       SELECT
         st.*,
         fw.warehouse_name as from_warehouse_name,
         tw.warehouse_name as to_warehouse_name,
-        COALESCE((SELECT COUNT(*) FROM stock_transfer_items sti WHERE sti.transfer_id = st.id), 0) as item_count
+        COALESCE((SELECT COUNT(*) FROM stock_transfer_items sti WHERE sti.transfer_id = st.id AND sti.tenant_id = @tenant_id), 0) as item_count
       FROM stock_transfers st
-      LEFT JOIN warehouses fw ON st.from_warehouse_id = fw.id
-      LEFT JOIN warehouses tw ON st.to_warehouse_id = tw.id
+      LEFT JOIN warehouses fw ON st.from_warehouse_id = fw.id AND fw.tenant_id = @tenant_id
+      LEFT JOIN warehouses tw ON st.to_warehouse_id = tw.id AND tw.tenant_id = @tenant_id
+      WHERE st.tenant_id = @tenant_id
       ORDER BY st.created_at DESC
-    `, `SELECT COUNT(*) as total FROM stock_transfers`);
+    `, `SELECT COUNT(*) as total FROM stock_transfers WHERE tenant_id = @tenant_id`, { tenant_id: tenantId });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/stock-transfers/:id", authenticate, async (req, res) => {
+router.get("/stock-transfers/:id", authenticate, requireTenantContext, requireFeatureAccess("inventory.stock_transfers"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const transfer = await db.query`
       SELECT
         st.*,
         fw.warehouse_name as from_warehouse_name,
         tw.warehouse_name as to_warehouse_name
       FROM stock_transfers st
-      LEFT JOIN warehouses fw ON st.from_warehouse_id = fw.id
-      LEFT JOIN warehouses tw ON st.to_warehouse_id = tw.id
-      WHERE st.id = ${req.params.id}
+      LEFT JOIN warehouses fw ON st.from_warehouse_id = fw.id AND fw.tenant_id = ${tenantId}
+      LEFT JOIN warehouses tw ON st.to_warehouse_id = tw.id AND tw.tenant_id = ${tenantId}
+      WHERE st.id = ${req.params.id} AND st.tenant_id = ${tenantId}
     `.then((result) => result.recordset[0]);
     if (!transfer) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -2639,8 +2694,8 @@ router.get("/stock-transfers/:id", authenticate, async (req, res) => {
         i.sku,
         i.unit
       FROM stock_transfer_items sti
-      LEFT JOIN items i ON sti.item_id = i.id
-      WHERE sti.transfer_id = ${req.params.id}
+      LEFT JOIN items i ON sti.item_id = i.id AND i.tenant_id = ${tenantId}
+      WHERE sti.transfer_id = ${req.params.id} AND sti.tenant_id = ${tenantId}
       ORDER BY i.name ASC
     `.then((result) => result.recordset);
 
@@ -2648,8 +2703,9 @@ router.get("/stock-transfers/:id", authenticate, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.post("/stock-transfers", authenticate, async (req: AuthRequest, res) => {
+router.post("/stock-transfers", authenticate, requireTenantContext, requireFeatureAccess("inventory.stock_transfers"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const { items: lineItems, ...transfer } = req.body;
     const id = uuidv4();
     const documentNumber = transfer.document_number || transfer.documentNumber || transfer.reference_number;
@@ -2667,44 +2723,53 @@ router.post("/stock-transfers", authenticate, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: "Source and destination warehouses must be different" });
     }
 
-    await db.query`INSERT INTO stock_transfers (id, document_number, date, from_warehouse_id, to_warehouse_id, status, notes, created_by, created_at) 
-      VALUES (${id}, ${documentNumber}, ${transferDate}, ${transfer.from_warehouse_id}, ${transfer.to_warehouse_id}, ${transfer.status || 'draft'}, ${transfer.notes || null}, ${req.user!.id}, GETDATE())`;
+    await assertTenantOwnership("warehouses", transfer.from_warehouse_id, tenantId, "Source warehouse");
+    await assertTenantOwnership("warehouses", transfer.to_warehouse_id, tenantId, "Destination warehouse");
+    for (const item of lineItems || []) {
+      await assertTenantOwnership("items", item.item_id, tenantId, "Item");
+    }
+
+    await db.query`INSERT INTO stock_transfers (id, tenant_id, document_number, date, from_warehouse_id, to_warehouse_id, status, notes, created_by, created_at)
+      VALUES (${id}, ${tenantId}, ${documentNumber}, ${transferDate}, ${transfer.from_warehouse_id}, ${transfer.to_warehouse_id}, ${transfer.status || 'draft'}, ${transfer.notes || null}, ${req.user!.id}, GETDATE())`;
     if (lineItems?.length > 0) {
       for (const item of lineItems) {
         const itemId = uuidv4();
-        await db.query`INSERT INTO stock_transfer_items (id, transfer_id, item_id, quantity) 
-          VALUES (${itemId}, ${id}, ${item.item_id}, ${item.quantity})`;
+        await db.query`INSERT INTO stock_transfer_items (id, tenant_id, transfer_id, item_id, quantity)
+          VALUES (${itemId}, ${tenantId}, ${id}, ${item.item_id}, ${item.quantity})`;
 
-        await updateStock(item.item_id, item.quantity, 'out', id, 'Stock Transfer Out', 0, req.user!.id);
-        await updateStock(item.item_id, item.quantity, 'in', id, 'Stock Transfer In', 0, req.user!.id);
-        await adjustWarehouseStock(transfer.from_warehouse_id, item.item_id, -Number(item.quantity || 0));
-        await adjustWarehouseStock(transfer.to_warehouse_id, item.item_id, Number(item.quantity || 0));
+        await updateStock(tenantId, item.item_id, item.quantity, 'out', id, 'Stock Transfer Out', 0, req.user!.id);
+        await updateStock(tenantId, item.item_id, item.quantity, 'in', id, 'Stock Transfer In', 0, req.user!.id);
+        await adjustWarehouseStock(tenantId, transfer.from_warehouse_id, item.item_id, -Number(item.quantity || 0));
+        await adjustWarehouseStock(tenantId, transfer.to_warehouse_id, item.item_id, Number(item.quantity || 0));
       }
     }
-    const dataResult = await db.query`SELECT * FROM stock_transfers WHERE id = ${id}`;
+    const dataResult = await db.query`SELECT * FROM stock_transfers WHERE id = ${id} AND tenant_id = ${tenantId}`;
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== POS SESSIONS =====
-router.get("/pos/sessions", authenticate, requireTenantContext, requireFeatureAccess("pos.sessions"), async (req, res) => {
+router.get("/pos/sessions", authenticate, requireTenantContext, requireFeatureAccess("pos.sessions"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     await sendPaginatedResults(req, res, `
       SELECT ps.*, u.username as owner_name
       FROM pos_sessions ps
       LEFT JOIN users u ON ps.opened_by = u.id
+      WHERE ps.tenant_id = @tenant_id
       ORDER BY ps.opened_at DESC
-    `, `SELECT COUNT(*) as total FROM pos_sessions`);
+    `, `SELECT COUNT(*) as total FROM pos_sessions WHERE tenant_id = @tenant_id`, { tenant_id: tenantId });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/pos/sessions/:id", authenticate, async (req, res) => {
+router.get("/pos/sessions/:id", authenticate, requireTenantContext, requireFeatureAccess("pos.sessions"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const sessionResult = await db.query`
       SELECT ps.*, u.username as owner_name
       FROM pos_sessions ps
       LEFT JOIN users u ON ps.opened_by = u.id
-      WHERE ps.id = ${req.params.id}
+      WHERE ps.id = ${req.params.id} AND ps.tenant_id = ${tenantId}
     `;
     const session = sessionResult.recordset[0];
     if (!session) {
@@ -2715,14 +2780,15 @@ router.get("/pos/sessions/:id", authenticate, async (req, res) => {
     const orders = await db.query`
       SELECT po.*, c.name as customer_name
       FROM pos_orders po
-      LEFT JOIN customers c ON po.customer_id = c.id
-      WHERE po.session_id = ${req.params.id}
+      LEFT JOIN customers c ON po.customer_id = c.id AND c.tenant_id = ${tenantId}
+      WHERE po.tenant_id = ${tenantId}
+        AND (po.session_id = ${req.params.id}
          OR (
            po.session_id IS NULL
            AND po.created_by = ${session.opened_by}
            AND po.created_at >= ${session.opened_at}
            AND (${session.closed_at} IS NULL OR po.created_at <= ${session.closed_at})
-         )
+         ))
       ORDER BY po.created_at DESC
     `.then((result) => result.recordset);
 
@@ -2736,38 +2802,44 @@ router.get("/pos/sessions/:id", authenticate, async (req, res) => {
 
 router.post("/pos/sessions", authenticate, requireTenantContext, requireFeatureAccess("pos.sessions"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const id = uuidv4();
     const { opening_balance, notes } = req.body;
-    await db.query`INSERT INTO pos_sessions (id, opened_by, opened_at, opening_balance, status, notes) VALUES (${id}, ${req.user!.id}, GETDATE(), ${opening_balance || 0}, 'open', ${notes || null})`;
-    const dataResult = await db.query`SELECT * FROM pos_sessions WHERE id = ${id}`;
+    await db.query`INSERT INTO pos_sessions (id, tenant_id, opened_by, opened_at, opening_balance, status, notes) VALUES (${id}, ${tenantId}, ${req.user!.id}, GETDATE(), ${opening_balance || 0}, 'open', ${notes || null})`;
+    const dataResult = await db.query`SELECT * FROM pos_sessions WHERE id = ${id} AND tenant_id = ${tenantId}`;
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.put("/pos/sessions/:id/close", authenticate, async (req, res) => {
+router.put("/pos/sessions/:id/close", authenticate, requireTenantContext, requireFeatureAccess("pos.sessions"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const { closing_balance, notes } = req.body;
-    await db.query`UPDATE pos_sessions SET status = 'closed', closed_at = GETDATE(), closing_balance = ${closing_balance}, notes = COALESCE(${notes}, notes) WHERE id = ${req.params.id}`;
-    const dataResult = await db.query`SELECT * FROM pos_sessions WHERE id = ${req.params.id}`;
+    await db.query`UPDATE pos_sessions SET status = 'closed', closed_at = GETDATE(), closing_balance = ${closing_balance}, notes = COALESCE(${notes}, notes) WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
+    const dataResult = await db.query`SELECT * FROM pos_sessions WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
+    if (!dataResult.recordset[0]) { res.status(404).json({ error: "Not found" }); return; }
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== POS ORDERS =====
-router.get("/pos/orders", authenticate, requireTenantContext, requireFeatureAccess("pos.orders"), async (req, res) => {
+router.get("/pos/orders", authenticate, requireTenantContext, requireFeatureAccess("pos.orders"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     await sendPaginatedResults(req, res, `
       SELECT po.*, c.name as customer_name, ps.opened_at as session_opened_at
       FROM pos_orders po
-      LEFT JOIN customers c ON po.customer_id = c.id
-      LEFT JOIN pos_sessions ps ON po.session_id = ps.id
+      LEFT JOIN customers c ON po.customer_id = c.id AND c.tenant_id = @tenant_id
+      LEFT JOIN pos_sessions ps ON po.session_id = ps.id AND ps.tenant_id = @tenant_id
+      WHERE po.tenant_id = @tenant_id
       ORDER BY po.created_at DESC
-    `, `SELECT COUNT(*) as total FROM pos_orders`);
+    `, `SELECT COUNT(*) as total FROM pos_orders WHERE tenant_id = @tenant_id`, { tenant_id: tenantId });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/pos/orders/:id", authenticate, async (req, res) => {
+router.get("/pos/orders/:id", authenticate, requireTenantContext, requireFeatureAccess("pos.orders"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const orderResult = await db.query`
       SELECT
         po.*,
@@ -2776,9 +2848,9 @@ router.get("/pos/orders/:id", authenticate, async (req, res) => {
         ps.closed_at as session_closed_at,
         ps.status as session_status
       FROM pos_orders po
-      LEFT JOIN customers c ON po.customer_id = c.id
-      LEFT JOIN pos_sessions ps ON po.session_id = ps.id
-      WHERE po.id = ${req.params.id}
+      LEFT JOIN customers c ON po.customer_id = c.id AND c.tenant_id = ${tenantId}
+      LEFT JOIN pos_sessions ps ON po.session_id = ps.id AND ps.tenant_id = ${tenantId}
+      WHERE po.id = ${req.params.id} AND po.tenant_id = ${tenantId}
     `;
     const order = orderResult.recordset[0];
     if (!order) {
@@ -2789,15 +2861,15 @@ router.get("/pos/orders/:id", authenticate, async (req, res) => {
     const items = await db.query`
       SELECT poi.*, i.sku, i.hsn_code, i.unit
       FROM pos_order_items poi
-      LEFT JOIN items i ON poi.item_id = i.id
-      WHERE poi.order_id = ${req.params.id}
+      LEFT JOIN items i ON poi.item_id = i.id AND i.tenant_id = ${tenantId}
+      WHERE poi.order_id = ${req.params.id} AND poi.tenant_id = ${tenantId}
       ORDER BY poi.item_name ASC
     `.then((result) => result.recordset);
 
     const payments = await db.query`
       SELECT *
       FROM pos_payments
-      WHERE order_id = ${req.params.id}
+      WHERE order_id = ${req.params.id} AND tenant_id = ${tenantId}
       ORDER BY created_at ASC
     `.then((result) => result.recordset);
 
@@ -2811,27 +2883,34 @@ router.get("/pos/orders/:id", authenticate, async (req, res) => {
 
 router.post("/pos/orders", authenticate, requireTenantContext, requireFeatureAccess("pos.orders"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const id = uuidv4();
     const { session_id, customer_id, subtotal, tax_amount, discount, total, items, payments } = req.body;
     const order_number = await generateDocNumber('pos_order');
 
-    await db.query`INSERT INTO pos_orders (id, session_id, customer_id, order_number, subtotal, tax_amount, discount, total, status, created_by, created_at) 
-      VALUES (${id}, ${session_id || null}, ${customer_id || null}, ${order_number}, ${subtotal || 0}, ${tax_amount || 0}, ${discount || 0}, ${total || 0}, 'completed', ${req.user!.id}, GETDATE())`;
+    await assertTenantOwnership("pos_sessions", session_id, tenantId, "POS session");
+    await assertTenantOwnership("customers", customer_id, tenantId, "Customer");
+    for (const item of items || []) {
+      await assertTenantOwnership("items", item.item_id, tenantId, "Item");
+    }
+
+    await db.query`INSERT INTO pos_orders (id, tenant_id, session_id, customer_id, order_number, subtotal, tax_amount, discount, total, status, created_by, created_at)
+      VALUES (${id}, ${tenantId}, ${session_id || null}, ${customer_id || null}, ${order_number}, ${subtotal || 0}, ${tax_amount || 0}, ${discount || 0}, ${total || 0}, 'completed', ${req.user!.id}, GETDATE())`;
 
     if (items && Array.isArray(items)) {
       for (const item of items) {
-        await db.query`INSERT INTO pos_order_items (id, order_id, item_id, item_name, quantity, rate, discount, tax_amount, amount) 
-          VALUES (${uuidv4()}, ${id}, ${item.item_id}, ${item.item_name}, ${item.quantity || 1}, ${item.rate || 0}, ${item.discount || 0}, ${item.tax_amount || 0}, ${item.amount || 0})`;
+        await db.query`INSERT INTO pos_order_items (id, tenant_id, order_id, item_id, item_name, quantity, rate, discount, tax_amount, amount)
+          VALUES (${uuidv4()}, ${tenantId}, ${id}, ${item.item_id}, ${item.item_name}, ${item.quantity || 1}, ${item.rate || 0}, ${item.discount || 0}, ${item.tax_amount || 0}, ${item.amount || 0})`;
 
         // Update stock
-        await updateStock(item.item_id, item.quantity, 'out', id, 'POS Order');
+        await updateStock(tenantId, item.item_id, item.quantity, 'out', id, 'POS Order', 0, req.user!.id);
       }
     }
 
     if (payments && Array.isArray(payments)) {
       for (const pay of payments) {
-        await db.query`INSERT INTO pos_payments (id, order_id, payment_mode, amount, reference_number, created_at) 
-          VALUES (${uuidv4()}, ${id}, ${pay.payment_mode}, ${pay.amount}, ${pay.reference_number || null}, GETDATE())`;
+        await db.query`INSERT INTO pos_payments (id, tenant_id, order_id, payment_mode, amount, reference_number, created_at)
+          VALUES (${uuidv4()}, ${tenantId}, ${id}, ${pay.payment_mode}, ${pay.amount}, ${pay.reference_number || null}, GETDATE())`;
       }
     }
 
@@ -2841,10 +2920,10 @@ router.post("/pos/orders", authenticate, requireTenantContext, requireFeatureAcc
       const upi_total = payments?.filter(p => p.payment_mode === 'upi').reduce((sum, p) => sum + Number(p.amount), 0) || 0;
       const card_total = payments?.filter(p => p.payment_mode === 'card').reduce((sum, p) => sum + Number(p.amount), 0) || 0;
 
-      await db.query`UPDATE pos_sessions SET total_sales = COALESCE(total_sales, 0) + ${total}, total_cash = COALESCE(total_cash, 0) + ${cash_total}, total_upi = COALESCE(total_upi, 0) + ${upi_total}, total_card = COALESCE(total_card, 0) + ${card_total} WHERE id = ${session_id}`;
+      await db.query`UPDATE pos_sessions SET total_sales = COALESCE(total_sales, 0) + ${total}, total_cash = COALESCE(total_cash, 0) + ${cash_total}, total_upi = COALESCE(total_upi, 0) + ${upi_total}, total_card = COALESCE(total_card, 0) + ${card_total} WHERE id = ${session_id} AND tenant_id = ${tenantId}`;
     }
 
-    const dataResult = await db.query`SELECT * FROM pos_orders WHERE id = ${id}`;
+    const dataResult = await db.query`SELECT * FROM pos_orders WHERE id = ${id} AND tenant_id = ${tenantId}`;
     res.json(dataResult.recordset[0]);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
@@ -3094,7 +3173,7 @@ router.post("/invoices", authenticate, requireTenantContext, requireFeatureAcces
           VALUES (${uuidv4()}, ${tenantId}, ${id}, ${item.item_id}, ${item.description || null}, ${item.quantity || 1}, ${item.rate || 0}, ${item.tax_rate_id || null}, ${item.tax_amount || 0}, ${item.amount || 0}, ${i})`;
 
         // Update stock
-        await updateStock(item.item_id, item.quantity, 'out', id, 'Invoice');
+        await updateStock(tenantId, item.item_id, item.quantity, 'out', id, 'Invoice', 0, req.user!.id);
       }
     }
 
@@ -3300,7 +3379,7 @@ router.post("/bills", authenticate, requireTenantContext, requireFeatureAccess("
           VALUES (${uuidv4()}, ${tenantId}, ${id}, ${item.item_id}, ${item.description || null}, ${item.quantity || 1}, ${item.rate || 0}, ${item.tax_rate_id || null}, ${item.tax_amount || 0}, ${item.amount || 0}, ${i})`;
 
         // Update stock
-        await updateStock(item.item_id, item.quantity, 'in', id, 'Bill', Number(item.rate || 0));
+        await updateStock(tenantId, item.item_id, item.quantity, 'in', id, 'Bill', Number(item.rate || 0), req.user!.id);
       }
     }
 
@@ -3406,7 +3485,7 @@ router.post("/credit-notes", authenticate, requireTenantContext, async (req: Aut
           VALUES (${uuidv4()}, ${tenantId}, ${id}, ${item.item_id}, ${item.description || null}, ${item.quantity || 1}, ${item.rate || 0}, ${item.tax_rate_id || null}, ${item.tax_amount || 0}, ${item.amount || 0}, ${i})`;
 
         // Update stock
-        await updateStock(item.item_id, item.quantity, 'in', id, 'Credit Note');
+        await updateStock(tenantId, item.item_id, item.quantity, 'in', id, 'Credit Note', 0, req.user!.id);
       }
     }
 
@@ -3498,7 +3577,7 @@ router.post("/vendor-credits", authenticate, requireTenantContext, async (req: A
         await db.query`INSERT INTO vendor_credit_items (id, tenant_id, vendor_credit_id, item_id, description, quantity, rate, tax_rate_id, tax_amount, amount, sort_order)
           VALUES (${uuidv4()}, ${tenantId}, ${id}, ${item.item_id}, ${item.description || null}, ${item.quantity || 1}, ${item.rate || 0}, ${item.tax_rate_id || null}, ${item.tax_amount || 0}, ${item.amount || 0}, ${i})`;
 
-        await updateStock(item.item_id, item.quantity, 'in', id, 'Vendor Credit', Number(item.rate || 0));
+        await updateStock(tenantId, item.item_id, item.quantity, 'in', id, 'Vendor Credit', Number(item.rate || 0), req.user!.id);
       }
     }
 
@@ -3980,7 +4059,7 @@ router.post("/sales-returns", authenticate, requireTenantContext, async (req: Au
         await db.query`INSERT INTO sales_return_items (id, tenant_id, sales_return_id, item_id, quantity, rate, tax_amount, total) 
           VALUES (${uuidv4()}, ${tenantId}, ${id}, ${item.item_id}, ${item.quantity}, ${item.rate}, ${item.tax_amount || 0}, ${item.total || item.amount || ((item.quantity || 0) * (item.rate || 0)) || 0})`;
 
-        await updateStock(item.item_id, item.quantity, 'in', id, 'Sales Return');
+        await updateStock(tenantId, item.item_id, item.quantity, 'in', id, 'Sales Return', 0, req.user!.id);
       }
     }
     const docResult = await db.query`SELECT * FROM sales_returns WHERE id = ${id} AND tenant_id = ${tenantId}`;
@@ -4067,7 +4146,7 @@ router.post("/purchase-returns", authenticate, requireTenantContext, async (req:
         await db.query`INSERT INTO purchase_return_items (id, tenant_id, purchase_return_id, item_id, quantity, rate, tax_amount, total) 
           VALUES (${uuidv4()}, ${tenantId}, ${id}, ${item.item_id}, ${item.quantity}, ${item.rate}, ${item.tax_amount || 0}, ${item.total || item.amount || ((item.quantity || 0) * (item.rate || 0)) || 0})`;
 
-        await updateStock(item.item_id, item.quantity, 'out', id, 'Purchase Return', Number(item.rate || 0));
+        await updateStock(tenantId, item.item_id, item.quantity, 'out', id, 'Purchase Return', Number(item.rate || 0), req.user!.id);
       }
     }
     const docResult = await db.query`SELECT * FROM purchase_returns WHERE id = ${id} AND tenant_id = ${tenantId}`;
@@ -4546,8 +4625,9 @@ router.get("/invoice-items", authenticate, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-router.get("/gst/hsn-summary", authenticate, async (req, res) => {
+router.get("/gst/hsn-summary", authenticate, requireTenantContext, requireFeatureAccess("gst.hsn_summary"), async (req: AuthRequest, res) => {
   try {
+    const tenantId = getTenantId(req);
     const dataResult = await db.query`
       SELECT
         summary.hsn,
@@ -4561,9 +4641,10 @@ router.get("/gst/hsn-summary", authenticate, async (req, res) => {
                 'Unknown Item'
               ) as item_name
             FROM invoice_items ii2
-            INNER JOIN invoices inv2 ON ii2.invoice_id = inv2.id
-            LEFT JOIN items it2 ON ii2.item_id = it2.id
+            INNER JOIN invoices inv2 ON ii2.invoice_id = inv2.id AND inv2.tenant_id = ${tenantId}
+            LEFT JOIN items it2 ON ii2.item_id = it2.id AND it2.tenant_id = ${tenantId}
             WHERE COALESCE(inv2.status, '') <> 'draft'
+              AND ii2.tenant_id = ${tenantId}
               AND COALESCE(NULLIF(LTRIM(RTRIM(it2.hsn_code)), ''), 'N/A') = summary.hsn
           ) names
         ) as item_names,
@@ -4581,9 +4662,10 @@ router.get("/gst/hsn-summary", authenticate, async (req, res) => {
           SUM(COALESCE(ii.amount, 0) + COALESCE(ii.tax_amount, 0)) as total_value,
           COUNT(DISTINCT ii.invoice_id) as invoice_count
         FROM invoice_items ii
-        INNER JOIN invoices inv ON ii.invoice_id = inv.id
-        LEFT JOIN items it ON ii.item_id = it.id
+        INNER JOIN invoices inv ON ii.invoice_id = inv.id AND inv.tenant_id = ${tenantId}
+        LEFT JOIN items it ON ii.item_id = it.id AND it.tenant_id = ${tenantId}
         WHERE COALESCE(inv.status, '') <> 'draft'
+          AND ii.tenant_id = ${tenantId}
         GROUP BY COALESCE(NULLIF(LTRIM(RTRIM(it.hsn_code)), ''), 'N/A')
       ) summary
       ORDER BY summary.total_value DESC, summary.hsn ASC

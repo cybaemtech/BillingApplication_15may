@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, setToken, clearToken } from "@/lib/api-client";
 
 interface AuthUser {
@@ -22,19 +23,21 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     const token = localStorage.getItem("bf_token");
     if (!token) { setLoading(false); return; }
     api.get<AuthUser>("/auth/me")
       .then((u) => setUser(u))
-      .catch(() => { clearToken(); setUser(null); })
+      .catch(() => { clearToken(); queryClient.clear(); setUser(null); })
       .finally(() => setLoading(false));
-  }, []);
+  }, [queryClient]);
 
   const signIn = async (email: string, password: string) => {
     try {
       const res = await api.post<{ token: string; user: AuthUser }>("/auth/signin", { email, password });
+      queryClient.clear();
       setToken(res.token);
       setUser(res.user);
       return { error: null };
@@ -46,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signUp = async (email: string, password: string, displayName: string) => {
     try {
       const res = await api.post<{ token: string; user: AuthUser }>("/auth/signup", { email, password, displayName });
+      queryClient.clear();
       setToken(res.token);
       setUser(res.user);
       return { error: null };
@@ -56,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     clearToken();
+    queryClient.clear();
     setUser(null);
   };
 

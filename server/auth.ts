@@ -68,26 +68,8 @@ async function resolveCompanyTenantId(user: any, payload: AuthUser) {
     return String(creatorTenantId);
   }
 
-  if (payload?.tenantId) {
-    console.log("[tenant] using token tenantId fallback", payload.tenantId);
-    return String(payload.tenantId);
-  }
-
-  const envTenantId = process.env.TEST_TENANT_ID || process.env.DEFAULT_TENANT_ID;
-  if (envTenantId) {
-    console.log("[tenant] using env fallback", envTenantId);
-    return String(envTenantId);
-  }
-
-  const firstCompany = await db.query`
-    SELECT TOP 1 id
-    FROM companies
-    ORDER BY created_at ASC
-  `;
-  const firstCompanyId = firstCompany.recordset[0]?.id;
-  if (firstCompanyId) {
-    console.log("[tenant] using first company fallback", firstCompanyId);
-    return String(firstCompanyId);
+  if (process.env.NODE_ENV === "test" && process.env.TEST_TENANT_ID) {
+    return process.env.TEST_TENANT_ID;
   }
 
   return undefined;

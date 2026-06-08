@@ -32,17 +32,8 @@ export async function requireTenantContext(req: AuthRequest, res: Response, next
       tenantId = byCreator.recordset[0]?.id;
     }
 
-    if (!tenantId) {
-      const firstCompany = await db.query`
-        SELECT TOP 1 id
-        FROM companies
-        ORDER BY created_at ASC
-      `;
-      tenantId = firstCompany.recordset[0]?.id;
-    }
-
-    if (!tenantId) {
-      tenantId = process.env.TEST_TENANT_ID || process.env.DEFAULT_TENANT_ID || undefined;
+    if (!tenantId && process.env.NODE_ENV === "test") {
+      tenantId = process.env.TEST_TENANT_ID || undefined;
     }
 
     if (!tenantId) {
