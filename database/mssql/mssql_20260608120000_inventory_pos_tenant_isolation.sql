@@ -41,7 +41,7 @@ DECLARE @default_tenant_id UNIQUEIDENTIFIER =
 
 UPDATE w
 SET tenant_id = COALESCE(w.tenant_id, b.company_id, @default_tenant_id)
-FROM dbo.warehouses w 
+FROM dbo.warehouses w
 LEFT JOIN dbo.branches b ON b.id = w.branch_id
 WHERE w.tenant_id IS NULL;
 
