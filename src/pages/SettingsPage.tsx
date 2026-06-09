@@ -160,7 +160,8 @@ function SubscriptionSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { userRole } = useAuth();
-  const isAdmin = userRole === "admin";
+  const normalizedRole = String(userRole || "").toUpperCase();
+  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
   const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
 
   const { data: subscription } = useQuery({
@@ -365,7 +366,8 @@ function OrganizationSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { userRole } = useAuth();
-  const isAdmin = userRole === "admin";
+  const normalizedRole = String(userRole || "").toUpperCase();
+  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
   const { data: gst, isLoading } = useQuery({ queryKey: ["gst_settings"], queryFn: gstSettingsApi.get });
   const [form, setForm] = useState<any>(null);
 
@@ -1109,7 +1111,8 @@ function TaxesSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { userRole } = useAuth();
-  const isAdmin = userRole === "admin";
+  const normalizedRole = String(userRole || "").toUpperCase();
+  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
   const { data: taxes = [], isLoading } = useQuery({ queryKey: ["tax_rates"], queryFn: taxRatesApi.list });
   const [name, setName] = useState("");
   const [rate, setRate] = useState("");
@@ -1456,7 +1459,8 @@ function InvoiceSettingsSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { userRole } = useAuth();
-  const isAdmin = userRole === "admin";
+  const normalizedRole = String(userRole || "").toUpperCase();
+  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
   const { data: sequences = [], isLoading } = useQuery({ queryKey: ["document_sequences"], queryFn: documentSequencesApi.list });
 
   const updateMutation = useMutation({
