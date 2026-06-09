@@ -5779,18 +5779,18 @@ router.post("/software/update", authenticate, async (req: AuthRequest, res) => {
     const { stdout: pullOut } = await execPromise("git pull origin main", execOptions);
     console.log("Pull result:", pullOut);
 
-    // 3. Install
-    console.log("[Software Update] Running npm install...");
-    await execPromise("npm install --no-audit --no-fund", execOptions);
+    // 3. Install (force inclusion of devDeps so vite is found)
+    console.log("[Software Update] Running npm install (including devDependencies)...");
+    await execPromise("npm install --include=dev --no-audit --no-fund", execOptions);
 
     // 4. Build
     console.log("[Software Update] Building application...");
     await execPromise("npm run build", execOptions);
 
     // 5. Success response
-    res.json({ 
-      success: true, 
-      message: "Software successfully updated and rebuilt. System is restarting..." 
+    res.json({
+      success: true,
+      message: "Software successfully updated and rebuilt. System is restarting..."
     });
 
     // 6. Restart after delay

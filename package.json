@@ -5,7 +5,7 @@
     "type": "module",
     "scripts": {
         "dev": "concurrently \"tsx --env-file=.env server/index.ts\" \"vite --port 5173\"",
-        "build": "npx vite build && npx tsc --project tsconfig.server.json",
+        "build": "vite build && tsc --project tsconfig.server.json",
         "build:dev": "vite build --mode development",
         "lint": "eslint .",
         "preview": "vite preview",
