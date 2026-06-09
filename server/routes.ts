@@ -17,8 +17,17 @@ const execPromise = promisify(exec);
 const router = Router();
 const FIXED_PAGE_LIMIT = 10;
 
+function normalizeRoleValue(role?: string | null) {
+  return String(role || "").trim().replace(/[\s-]+/g, "_").toUpperCase();
+}
+
+function isAdminRoleValue(role?: string | null) {
+  const normalizedRole = normalizeRoleValue(role);
+  return normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+}
+
 function requireAdmin(req: AuthRequest, res: any): boolean {
-  if (!["admin", "SUPER_ADMIN"].includes(String(req.user?.role || ""))) {
+  if (!isAdminRoleValue(req.user?.role)) {
     res.status(403).json({ error: "Admin access required" });
     return false;
   }
@@ -28,7 +37,7 @@ function requireAdmin(req: AuthRequest, res: any): boolean {
 async function requireCybaemtechSuperAdmin(req: AuthRequest, res: any): Promise<boolean> {
   const email = String(req.user?.email || "").toLowerCase();
   const tenantId = String(req.user?.tenantId || "");
-  const hasSuperRole = String(req.user?.role || "").toUpperCase() === "SUPER_ADMIN";
+  const hasSuperRole = normalizeRoleValue(req.user?.role) === "SUPER_ADMIN";
 
   if (email === "ganesh@gmail.com" && hasSuperRole) {
     return true;
@@ -91,7 +100,7 @@ async function resolveCybaemtechTenantId() {
 }
 
 function isSuperAdminRequest(req: AuthRequest): boolean {
-  return String(req.user?.role || "").toUpperCase() === "SUPER_ADMIN";
+  return normalizeRoleValue(req.user?.role) === "SUPER_ADMIN";
 }
 
 function normalizeTenantRole(role?: string | null) {
@@ -99,8 +108,8 @@ function normalizeTenantRole(role?: string | null) {
 }
 
 function canManageTenantRole(currentRole?: string | null, targetRole?: string | null) {
-  const actor = String(currentRole || "").toUpperCase();
-  const target = String(targetRole || "").toUpperCase();
+  const actor = normalizeRoleValue(currentRole);
+  const target = normalizeRoleValue(targetRole);
 
   if (actor === "SUPER_ADMIN") {
     return true;
@@ -1705,6 +1714,7 @@ router.get("/document-sequences", authenticate, requireTenantContext, async (req
 
 router.put("/document-sequences/:id", authenticate, requireTenantContext, async (req: AuthRequest, res) => {
   try {
+    if (!requireAdmin(req, res)) return;
     const tenantId = getTenantId(req);
     const { prefix, next_number, padding } = req.body;
     await db.query`UPDATE document_sequences SET prefix = ${prefix}, next_number = ${next_number}, padding = ${padding} WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
@@ -5142,7 +5152,7 @@ router.get("/branding", authenticate, async (req: AuthRequest, res) => {
 router.get("/organizations", authenticate, async (req: AuthRequest, res) => {
   try {
     const email = String(req.user?.email || "").toLowerCase();
-    const hasSuperRole = String(req.user?.role || "").toUpperCase() === "SUPER_ADMIN";
+    const hasSuperRole = normalizeRoleValue(req.user?.role) === "SUPER_ADMIN";
     if (!hasSuperRole && email !== "ganesh@gmail.com") {
       return res.json({ organizations: [] });
     }
@@ -5694,7 +5704,7 @@ router.post("/billing/upgrade/confirm", authenticate, requireTenantContext, asyn
 router.get("/software/updates", authenticate, async (req: AuthRequest, res) => {
   try {
     // Only super admins or company admins can check for updates
-    if (!["admin", "SUPER_ADMIN"].includes(String(req.user?.role || ""))) {
+    if (!isAdminRoleValue(req.user?.role)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }

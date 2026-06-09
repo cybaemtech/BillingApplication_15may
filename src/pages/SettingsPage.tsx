@@ -15,6 +15,19 @@ import SubscriptionSaaSSection from "@/pages/settings/SubscriptionSaaSSection";
 
 type Section = null | "organization" | "users" | "taxes" | "invoice" | "subscription" | "software";
 
+function normalizeRole(role?: string | null) {
+  return String(role || "").trim().replace(/[\s-]+/g, "_").toUpperCase();
+}
+
+function isAdminRole(role?: string | null) {
+  const normalizedRole = normalizeRole(role);
+  return normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+}
+
+function isSuperAdminRole(role?: string | null) {
+  return normalizeRole(role) === "SUPER_ADMIN";
+}
+
 declare global {
   interface Window {
     Razorpay?: any;
@@ -38,8 +51,7 @@ function loadRazorpayScript() {
 export default function SettingsPage() {
   const [section, setSection] = useState<Section>(null);
   const { userRole } = useAuth();
-  const normalizedRole = String(userRole || "").toUpperCase();
-  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+  const isAdmin = isAdminRole(userRole);
 
   if (section) {
     const blockedForUser = !isAdmin && (section === "organization" || section === "users" || section === "taxes");
@@ -160,8 +172,7 @@ function SubscriptionSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { userRole } = useAuth();
-  const normalizedRole = String(userRole || "").toUpperCase();
-  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+  const isAdmin = isAdminRole(userRole);
   const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
 
   const { data: subscription } = useQuery({
@@ -366,8 +377,7 @@ function OrganizationSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { userRole } = useAuth();
-  const normalizedRole = String(userRole || "").toUpperCase();
-  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+  const isAdmin = isAdminRole(userRole);
   const { data: gst, isLoading } = useQuery({ queryKey: ["gst_settings"], queryFn: gstSettingsApi.get });
   const [form, setForm] = useState<any>(null);
 
@@ -410,9 +420,9 @@ function UsersSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { user, userRole } = useAuth();
-  const normalizedRole = String(userRole || user?.role || "").toUpperCase();
-  const isSuperAdmin = normalizedRole === "SUPER_ADMIN";
-  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+  const effectiveRole = userRole || user?.role;
+  const isSuperAdmin = isSuperAdminRole(effectiveRole);
+  const isAdmin = isAdminRole(effectiveRole);
   const companyRoleOptions = [
     { value: "admin", label: "Admin" },
     { value: "accountant", label: "Accountant" },
@@ -1111,8 +1121,7 @@ function TaxesSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { userRole } = useAuth();
-  const normalizedRole = String(userRole || "").toUpperCase();
-  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+  const isAdmin = isAdminRole(userRole);
   const { data: taxes = [], isLoading } = useQuery({ queryKey: ["tax_rates"], queryFn: taxRatesApi.list });
   const [name, setName] = useState("");
   const [rate, setRate] = useState("");
@@ -1296,8 +1305,7 @@ function SoftwareSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { userRole } = useAuth();
-  const normalizedRole = String(userRole || "").toUpperCase();
-  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+  const isAdmin = isAdminRole(userRole);
 
   const { data: updateInfo, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ["software_updates"],
@@ -1459,8 +1467,7 @@ function InvoiceSettingsSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { userRole } = useAuth();
-  const normalizedRole = String(userRole || "").toUpperCase();
-  const isAdmin = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+  const isAdmin = isAdminRole(userRole);
   const { data: sequences = [], isLoading } = useQuery({ queryKey: ["document_sequences"], queryFn: documentSequencesApi.list });
 
   const updateMutation = useMutation({

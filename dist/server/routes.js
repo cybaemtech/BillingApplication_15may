@@ -13,8 +13,15 @@ import { promisify } from "util";
 const execPromise = promisify(exec);
 const router = Router();
 const FIXED_PAGE_LIMIT = 10;
+function normalizeRoleValue(role) {
+    return String(role || "").trim().replace(/[\s-]+/g, "_").toUpperCase();
+}
+function isAdminRoleValue(role) {
+    const normalizedRole = normalizeRoleValue(role);
+    return normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+}
 function requireAdmin(req, res) {
-    if (!["admin", "SUPER_ADMIN"].includes(String(req.user?.role || ""))) {
+    if (!isAdminRoleValue(req.user?.role)) {
         res.status(403).json({ error: "Admin access required" });
         return false;
     }
@@ -23,7 +30,7 @@ function requireAdmin(req, res) {
 async function requireCybaemtechSuperAdmin(req, res) {
     const email = String(req.user?.email || "").toLowerCase();
     const tenantId = String(req.user?.tenantId || "");
-    const hasSuperRole = String(req.user?.role || "").toUpperCase() === "SUPER_ADMIN";
+    const hasSuperRole = normalizeRoleValue(req.user?.role) === "SUPER_ADMIN";
     if (email === "ganesh@gmail.com" && hasSuperRole) {
         return true;
     }
@@ -74,14 +81,14 @@ async function resolveCybaemtechTenantId() {
     return fallback?.id ? String(fallback.id) : null;
 }
 function isSuperAdminRequest(req) {
-    return String(req.user?.role || "").toUpperCase() === "SUPER_ADMIN";
+    return normalizeRoleValue(req.user?.role) === "SUPER_ADMIN";
 }
 function normalizeTenantRole(role) {
     return String(role || "viewer").trim().toLowerCase();
 }
 function canManageTenantRole(currentRole, targetRole) {
-    const actor = String(currentRole || "").toUpperCase();
-    const target = String(targetRole || "").toUpperCase();
+    const actor = normalizeRoleValue(currentRole);
+    const target = normalizeRoleValue(targetRole);
     if (actor === "SUPER_ADMIN") {
         return true;
     }
@@ -420,7 +427,7 @@ function sendPaginatedArray(req, res, items) {
     });
 }
 // ===== HELPER: Generate Document Number =====
-async function generateDocNumber(docType) {
+async function generateDocNumber(docType, tenantId) {
     const defaults = {
         quotation: { prefix: "QT-", padding: 4 },
         sales_order: { prefix: "SO-", padding: 4 },
@@ -438,16 +445,16 @@ async function generateDocNumber(docType) {
         journal_entry: { prefix: "JE-", padding: 4 },
         pos_order: { prefix: "POS-", padding: 4 },
     };
-    let seqResult = await db.query `SELECT * FROM document_sequences WHERE document_type = ${docType}`;
+    let seqResult = await db.query `SELECT * FROM document_sequences WHERE document_type = ${docType} AND tenant_id = ${tenantId}`;
     let seq = seqResult.recordset[0];
     if (!seq) {
         const fallback = defaults[docType];
         if (!fallback)
             throw new Error(`Document sequence not found: ${docType}`);
         const id = uuidv4();
-        await db.query `INSERT INTO document_sequences (id, document_type, prefix, next_number, padding)
-      VALUES (${id}, ${docType}, ${fallback.prefix}, 1, ${fallback.padding})`;
-        seqResult = await db.query `SELECT * FROM document_sequences WHERE document_type = ${docType}`;
+        await db.query `INSERT INTO document_sequences (id, tenant_id, document_type, prefix, next_number, padding)
+      VALUES (${id}, ${tenantId}, ${docType}, ${fallback.prefix}, 1, ${fallback.padding})`;
+        seqResult = await db.query `SELECT * FROM document_sequences WHERE document_type = ${docType} AND tenant_id = ${tenantId}`;
         seq = seqResult.recordset[0];
     }
     const tableName = getDocumentTableName(docType);
@@ -460,7 +467,7 @@ async function generateDocNumber(docType) {
         if (!tableName) {
             break;
         }
-        const existingResult = await runRawQuery(`SELECT TOP 1 id FROM dbo.${tableName} WHERE ${identifierColumn} = @candidate`, { candidate });
+        const existingResult = await runRawQuery(`SELECT TOP 1 id FROM dbo.${tableName} WHERE ${identifierColumn} = @candidate AND tenant_id = @tenant_id`, { candidate, tenant_id: tenantId });
         if (!existingResult.recordset[0]) {
             break;
         }
@@ -1303,7 +1310,7 @@ router.post("/journal-entries", authenticate, requireTenantContext, requireFeatu
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { date, description, journal_type, reference_id, reference_type, is_auto, lines } = req.body;
-        const document_number = await generateDocNumber('journal_entry');
+        const document_number = await generateDocNumber('journal_entry', tenantId);
         const totalDebit = (lines || []).reduce((sum, line) => sum + Number(line.debit || 0), 0);
         const totalCredit = (lines || []).reduce((sum, line) => sum + Number(line.credit || 0), 0);
         if (!Array.isArray(lines) || lines.length < 2) {
@@ -1650,20 +1657,24 @@ router.post("/gst-settings", authenticate, requireTenantContext, requireFeatureA
     }
 });
 // ===== DOCUMENT SEQUENCES =====
-router.get("/document-sequences", authenticate, async (req, res) => {
+router.get("/document-sequences", authenticate, requireTenantContext, async (req, res) => {
     try {
-        const data = await db.query `SELECT * FROM document_sequences ORDER BY document_type ASC`.then(res => res.recordset);
+        const tenantId = getTenantId(req);
+        const data = await db.query `SELECT * FROM document_sequences WHERE tenant_id = ${tenantId} ORDER BY document_type ASC`.then(res => res.recordset);
         res.json(data);
     }
     catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
-router.put("/document-sequences/:id", authenticate, async (req, res) => {
+router.put("/document-sequences/:id", authenticate, requireTenantContext, async (req, res) => {
     try {
+        if (!requireAdmin(req, res))
+            return;
+        const tenantId = getTenantId(req);
         const { prefix, next_number, padding } = req.body;
-        await db.query `UPDATE document_sequences SET prefix = ${prefix}, next_number = ${next_number}, padding = ${padding} WHERE id = ${req.params.id}`;
-        const dataResult = await db.query `SELECT * FROM document_sequences WHERE id = ${req.params.id}`;
+        await db.query `UPDATE document_sequences SET prefix = ${prefix}, next_number = ${next_number}, padding = ${padding} WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
+        const dataResult = await db.query `SELECT * FROM document_sequences WHERE id = ${req.params.id} AND tenant_id = ${tenantId}`;
         res.json(dataResult.recordset[0]);
     }
     catch (e) {
@@ -2876,7 +2887,7 @@ router.post("/pos/orders", authenticate, requireTenantContext, requireFeatureAcc
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { session_id, customer_id, subtotal, tax_amount, discount, total, items, payments } = req.body;
-        const order_number = await generateDocNumber('pos_order');
+        const order_number = await generateDocNumber('pos_order', tenantId);
         await assertTenantOwnership("pos_sessions", session_id, tenantId, "POS session");
         await assertTenantOwnership("customers", customer_id, tenantId, "Customer");
         for (const item of items || []) {
@@ -3164,7 +3175,7 @@ router.post("/invoices", authenticate, requireTenantContext, requireFeatureAcces
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { customer_id, date, due_date, sales_order_id, reference_id, reference_type, status, subtotal, tax_amount, total, balance_due, notes, terms, items } = req.body;
-        const document_number = await generateDocNumber('invoice');
+        const document_number = await generateDocNumber('invoice', tenantId);
         await db.query `INSERT INTO invoices (id, tenant_id, document_number, date, due_date, customer_id, sales_order_id, reference_id, reference_type, status, subtotal, tax_amount, total, balance_due, notes, terms, created_by, created_at, updated_at) 
       VALUES (${id}, ${tenantId}, ${document_number}, ${date}, ${due_date || null}, ${customer_id}, ${sales_order_id || null}, ${reference_id || null}, ${reference_type || null}, ${status || 'draft'}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${balance_due || total || 0}, ${notes || null}, ${terms || null}, ${req.user.id}, GETDATE(), GETDATE())`;
         if (items && Array.isArray(items)) {
@@ -3281,7 +3292,7 @@ router.post("/purchase-orders", authenticate, requireTenantContext, requireFeatu
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { vendor_id, date, expected_delivery, reference_id, reference_type, status, subtotal, tax_amount, total, notes, items } = req.body;
-        const document_number = await generateDocNumber('purchase_order');
+        const document_number = await generateDocNumber('purchase_order', tenantId);
         await db.query `INSERT INTO purchase_orders (id, tenant_id, document_number, date, expected_delivery, vendor_id, reference_id, reference_type, status, subtotal, tax_amount, total, notes, created_by, created_at, updated_at) 
       VALUES (${id}, ${tenantId}, ${document_number}, ${date}, ${expected_delivery || null}, ${vendor_id}, ${reference_id || null}, ${reference_type || null}, ${status || 'draft'}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${notes || null}, ${req.user.id}, GETDATE(), GETDATE())`;
         if (items && Array.isArray(items)) {
@@ -3395,7 +3406,7 @@ router.post("/bills", authenticate, requireTenantContext, requireFeatureAccess("
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { vendor_id, date, due_date, purchase_order_id, reference_id, reference_type, status, subtotal, tax_amount, total, balance_due, notes, items } = req.body;
-        const document_number = await generateDocNumber('bill');
+        const document_number = await generateDocNumber('bill', tenantId);
         await db.query `INSERT INTO bills (id, tenant_id, document_number, date, due_date, vendor_id, purchase_order_id, reference_id, reference_type, status, subtotal, tax_amount, total, balance_due, notes, created_by, created_at, updated_at) 
       VALUES (${id}, ${tenantId}, ${document_number}, ${date}, ${due_date || null}, ${vendor_id}, ${purchase_order_id || null}, ${reference_id || null}, ${reference_type || null}, ${status || 'draft'}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${balance_due || total || 0}, ${notes || null}, ${req.user.id}, GETDATE(), GETDATE())`;
         if (items && Array.isArray(items)) {
@@ -3513,7 +3524,7 @@ router.post("/credit-notes", authenticate, requireTenantContext, async (req, res
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { customer_id, date, invoice_id, reference_id, reference_type, status, subtotal, tax_amount, total, reason, items } = req.body;
-        const document_number = await generateDocNumber('credit_note');
+        const document_number = await generateDocNumber('credit_note', tenantId);
         await db.query `INSERT INTO credit_notes (id, tenant_id, document_number, date, customer_id, invoice_id, reference_id, reference_type, status, subtotal, tax_amount, total, reason, created_by, created_at, updated_at) 
       VALUES (${id}, ${tenantId}, ${document_number}, ${date}, ${customer_id}, ${invoice_id || null}, ${reference_id || null}, ${reference_type || null}, ${status || 'draft'}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${reason || null}, ${req.user.id}, GETDATE(), GETDATE())`;
         if (items && Array.isArray(items)) {
@@ -3611,7 +3622,7 @@ router.post("/vendor-credits", authenticate, requireTenantContext, async (req, r
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { vendor_id, date, bill_id, reference_id, reference_type, status, subtotal, tax_amount, total, reason, items } = req.body;
-        const document_number = await generateDocNumber('vendor_credit');
+        const document_number = await generateDocNumber('vendor_credit', tenantId);
         await db.query `INSERT INTO vendor_credits (id, tenant_id, document_number, date, vendor_id, bill_id, reference_id, reference_type, status, subtotal, tax_amount, total, reason, created_by, created_at, updated_at)
       VALUES (${id}, ${tenantId}, ${document_number}, ${date || new Date().toISOString().split("T")[0]}, ${vendor_id}, ${bill_id || null}, ${reference_id || null}, ${reference_type || null}, ${status || 'draft'}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${reason || null}, ${req.user.id}, GETDATE(), GETDATE())`;
         if (items && Array.isArray(items)) {
@@ -3708,7 +3719,7 @@ router.post("/quotations", authenticate, requireTenantContext, requireFeatureAcc
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { customer_id, date, valid_until, reference_id, reference_type, status, subtotal, tax_amount, total, notes, terms, items } = req.body;
-        const document_number = await generateDocNumber('quotation');
+        const document_number = await generateDocNumber('quotation', tenantId);
         await db.query `INSERT INTO quotations (id, tenant_id, document_number, date, valid_until, customer_id, reference_id, reference_type, status, subtotal, tax_amount, total, notes, terms, created_by, created_at, updated_at) 
       VALUES (${id}, ${tenantId}, ${document_number}, ${date}, ${valid_until || null}, ${customer_id}, ${reference_id || null}, ${reference_type || null}, ${status || 'draft'}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${notes || null}, ${terms || null}, ${req.user.id}, GETDATE(), GETDATE())`;
         if (items && Array.isArray(items)) {
@@ -3822,7 +3833,7 @@ router.post("/sales-orders", authenticate, requireTenantContext, requireFeatureA
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { customer_id, date, expected_delivery, quotation_id, reference_id, reference_type, status, subtotal, tax_amount, total, notes, items } = req.body;
-        const document_number = await generateDocNumber('sales_order');
+        const document_number = await generateDocNumber('sales_order', tenantId);
         await db.query `INSERT INTO sales_orders (id, tenant_id, document_number, date, expected_delivery, customer_id, quotation_id, reference_id, reference_type, status, subtotal, tax_amount, total, notes, created_by, created_at, updated_at) 
       VALUES (${id}, ${tenantId}, ${document_number}, ${date}, ${expected_delivery || null}, ${customer_id}, ${quotation_id || null}, ${reference_id || null}, ${reference_type || null}, ${status || 'confirmed'}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${notes || null}, ${req.user.id}, GETDATE(), GETDATE())`;
         if (items && Array.isArray(items)) {
@@ -4140,7 +4151,7 @@ router.post("/sales-returns", authenticate, requireTenantContext, async (req, re
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { customer_id, invoice_id, date, subtotal, tax_amount, total, reason, notes, status, items } = req.body;
-        const document_number = await generateDocNumber('sales_return');
+        const document_number = await generateDocNumber('sales_return', tenantId);
         const today = new Date().toISOString().split("T")[0];
         await db.query `INSERT INTO sales_returns (id, tenant_id, document_number, customer_id, invoice_id, date, subtotal, tax_amount, total, reason, notes, status, created_by, created_at, updated_at) 
       VALUES (${id}, ${tenantId}, ${document_number}, ${customer_id}, ${invoice_id || null}, ${date || today}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${reason || null}, ${notes || null}, ${status || 'received'}, ${req.user.id}, GETDATE(), GETDATE())`;
@@ -4235,7 +4246,7 @@ router.post("/purchase-returns", authenticate, requireTenantContext, async (req,
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { vendor_id, bill_id, date, subtotal, tax_amount, total, reason, notes, status, items } = req.body;
-        const document_number = await generateDocNumber('purchase_return');
+        const document_number = await generateDocNumber('purchase_return', tenantId);
         const today = new Date().toISOString().split("T")[0];
         await db.query `INSERT INTO purchase_returns (id, tenant_id, document_number, vendor_id, bill_id, date, subtotal, tax_amount, total, reason, notes, status, created_by, created_at, updated_at) 
       VALUES (${id}, ${tenantId}, ${document_number}, ${vendor_id}, ${bill_id || null}, ${date || today}, ${subtotal || 0}, ${tax_amount || 0}, ${total || 0}, ${reason || null}, ${notes || null}, ${status || 'dispatched'}, ${req.user.id}, GETDATE(), GETDATE())`;
@@ -4475,7 +4486,7 @@ router.post("/payments-received", authenticate, requireTenantContext, requireFea
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { customer_id, invoice_id, amount, date, payment_mode, reference_number, notes } = req.body;
-        const payment_number = await generateDocNumber('payment_received');
+        const payment_number = await generateDocNumber('payment_received', tenantId);
         await db.query `INSERT INTO payments_received (id, tenant_id, payment_number, date, customer_id, invoice_id, amount, payment_mode, reference_number, notes, created_by, created_at) 
       VALUES (${id}, ${tenantId}, ${payment_number}, ${date}, ${customer_id}, ${invoice_id || null}, ${amount}, ${payment_mode || 'cash'}, ${reference_number || null}, ${notes || null}, ${req.user.id}, GETDATE())`;
         if (invoice_id) {
@@ -4567,7 +4578,7 @@ router.post("/payments-made", authenticate, requireTenantContext, requireFeature
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { vendor_id, bill_id, amount, date, payment_mode, reference_number, notes } = req.body;
-        const payment_number = await generateDocNumber('payment_made');
+        const payment_number = await generateDocNumber('payment_made', tenantId);
         await db.query `INSERT INTO payments_made (id, tenant_id, payment_number, date, vendor_id, bill_id, amount, payment_mode, reference_number, notes, created_by, created_at) 
       VALUES (${id}, ${tenantId}, ${payment_number}, ${date}, ${vendor_id}, ${bill_id || null}, ${amount}, ${payment_mode || 'bank_transfer'}, ${reference_number || null}, ${notes || null}, ${req.user.id}, GETDATE())`;
         if (bill_id) {
@@ -4899,7 +4910,7 @@ router.post("/delivery-challans", authenticate, requireTenantContext, async (req
         const tenantId = getTenantId(req);
         const id = uuidv4();
         const { customer_id, date, sales_order_id, reference_id, reference_type, status, notes, subtotal, tax_amount, total, items } = req.body;
-        const document_number = await generateDocNumber('delivery_challan');
+        const document_number = await generateDocNumber('delivery_challan', tenantId);
         const safeItems = Array.isArray(items) ? items : [];
         const computedSubtotal = subtotal ?? safeItems.reduce((sum, item) => sum + Number(item.amount || (Number(item.quantity || 0) * Number(item.rate || 0))), 0);
         const computedTaxAmount = tax_amount ?? safeItems.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
@@ -5273,7 +5284,7 @@ router.get("/branding", authenticate, async (req, res) => {
 router.get("/organizations", authenticate, async (req, res) => {
     try {
         const email = String(req.user?.email || "").toLowerCase();
-        const hasSuperRole = String(req.user?.role || "").toUpperCase() === "SUPER_ADMIN";
+        const hasSuperRole = normalizeRoleValue(req.user?.role) === "SUPER_ADMIN";
         if (!hasSuperRole && email !== "ganesh@gmail.com") {
             return res.json({ organizations: [] });
         }
@@ -5783,7 +5794,7 @@ router.post("/billing/upgrade/confirm", authenticate, requireTenantContext, asyn
 router.get("/software/updates", authenticate, async (req, res) => {
     try {
         // Only super admins or company admins can check for updates
-        if (!["admin", "SUPER_ADMIN"].includes(String(req.user?.role || ""))) {
+        if (!isAdminRoleValue(req.user?.role)) {
             res.status(403).json({ error: "Access denied" });
             return;
         }
@@ -5860,9 +5871,9 @@ router.post("/software/update", authenticate, async (req, res) => {
         console.log("[Software Update] Pulling latest changes from origin/main...");
         const { stdout: pullOut } = await execPromise("git pull origin main", execOptions);
         console.log("Pull result:", pullOut);
-        // 3. Install
-        console.log("[Software Update] Running npm install...");
-        await execPromise("npm install --no-audit --no-fund", execOptions);
+        // 3. Install (force inclusion of devDeps so vite is found)
+        console.log("[Software Update] Running npm install (including devDependencies)...");
+        await execPromise("npm install --include=dev --no-audit --no-fund", execOptions);
         // 4. Build
         console.log("[Software Update] Building application...");
         await execPromise("npm run build", execOptions);
