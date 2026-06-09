@@ -5697,33 +5697,52 @@ router.get("/software/updates", authenticate, async (req: AuthRequest, res) => {
       return;
     }
 
-    const execOptions = { cwd: process.cwd() };
+    const execOptions = { cwd: process.cwd(), maxBuffer: 10 * 1024 * 1024 };
 
     // 1. Get current commit info
-    const { stdout: currentHash } = await execPromise("git rev-parse HEAD", execOptions);
-    const { stdout: currentDate } = await execPromise("git log -1 --format=%cd", execOptions);
+    const { stdout: currentHash } = await execPromise("git rev-parse HEAD", execOptions).catch(() => ({ stdout: "unknown" }));
+    const { stdout: currentDate } = await execPromise("git log -1 --format=%cd", execOptions).catch(() => ({ stdout: "unknown" }));
 
     // 2. Fetch latest from origin
     try {
-      await execPromise("git fetch origin", execOptions);
+      await execPromise("git fetch origin main", execOptions);
     } catch (fetchErr) {
       console.error("Git fetch failed:", fetchErr);
     }
 
-    // 3. Get status
-    const { stdout: status } = await execPromise("git status -uno", execOptions);
-    const isAhead = status.includes("behind");
+    // 3. Get status to see if behind
+    const { stdout: revList } = await execPromise("git rev-list HEAD..origin/main", execOptions).catch(() => ({ stdout: "" }));
+    const behindCount = revList.trim() ? revList.trim().split("\n").length : 0;
+    const isBehind = behindCount > 0;
 
-    // 4. Get remote commit info if ahead
+    // 4. Get remote commit info and changelog if behind
     let latestCommit = null;
-    if (isAhead) {
-      const { stdout: remoteInfo } = await execPromise("git log -1 origin/main --format=%H|%cd|%s", execOptions);
-      const parts = remoteInfo.trim().split("|");
-      latestCommit = {
-        hash: parts[0],
-        date: parts[1],
-        message: parts[2],
-      };
+    let changelog = [];
+
+    if (isBehind) {
+      // Get the single latest commit for summary
+      const { stdout: remoteInfo } = await execPromise("git log -1 origin/main --format=\"%H|%cd|%s\"", execOptions).catch(() => ({ stdout: "" }));
+      if (remoteInfo) {
+        const parts = remoteInfo.trim().split("|");
+        latestCommit = {
+          hash: parts[0],
+          date: parts[1],
+          message: parts[2],
+        };
+      }
+
+      // Get list of all commits between current and origin/main
+      const { stdout: logOutput } = await execPromise("git log HEAD..origin/main --format=\"%H|%cd|%s\"", execOptions).catch(() => ({ stdout: "" }));
+      if (logOutput.trim()) {
+        changelog = logOutput.trim().split("\n").map(line => {
+          const p = line.split("|");
+          return {
+            hash: p[0],
+            date: p[1],
+            message: p[2]
+          };
+        });
+      }
     }
 
     res.json({
@@ -5732,7 +5751,9 @@ router.get("/software/updates", authenticate, async (req: AuthRequest, res) => {
         date: currentDate.trim(),
       },
       latest: latestCommit,
-      updateAvailable: isAhead,
+      changelog: changelog,
+      updateAvailable: isBehind,
+      behindCount: behindCount
     });
   } catch (e: any) {
     console.error("Software update check error:", e);
@@ -5744,11 +5765,48 @@ router.post("/software/update", authenticate, async (req: AuthRequest, res) => {
   try {
     if (!requireAdmin(req, res)) return;
 
-    const { stdout } = await execPromise("git pull origin main", { cwd: process.cwd() });
-    res.json({ success: true, output: stdout });
+    const execOptions = { cwd: process.cwd(), maxBuffer: 1024 * 1024 * 100 }; // 100MB buffer
+    console.log("[Software Update] Starting automated update process...");
+
+    // 1. Stash changes to avoid pull conflicts
+    console.log("[Software Update] Stashing local changes...");
+    await execPromise("git stash", execOptions).catch((e) => {
+      console.warn("Git stash failed (might be nothing to stash):", e.message);
+    });
+
+    // 2. Pull
+    console.log("[Software Update] Pulling latest changes from origin/main...");
+    const { stdout: pullOut } = await execPromise("git pull origin main", execOptions);
+    console.log("Pull result:", pullOut);
+
+    // 3. Install
+    console.log("[Software Update] Running npm install...");
+    await execPromise("npm install --no-audit --no-fund", execOptions);
+
+    // 4. Build
+    console.log("[Software Update] Building application...");
+    await execPromise("npm run build", execOptions);
+
+    // 5. Success response
+    res.json({ 
+      success: true, 
+      message: "Software successfully updated and rebuilt. System is restarting..." 
+    });
+
+    // 6. Restart after delay
+    setTimeout(() => {
+      console.log("[Software Update] Triggering process restart...");
+      execPromise("pm2 restart all", execOptions).catch(err => {
+        console.error("PM2 restart failed, attempting manual exit:", err);
+        process.exit(0);
+      });
+    }, 3000);
+
   } catch (e: any) {
-    console.error("Software update error:", e);
-    res.status(500).json({ error: e.message });
+    console.error("[Software Update] FAILED:", e);
+    // Try to restore the stash if we failed
+    await execPromise("git stash pop", { cwd: process.cwd() }).catch(() => null);
+    res.status(500).json({ error: `Update failed: ${e.message}` });
   }
 });
 

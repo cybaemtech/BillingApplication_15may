@@ -14,7 +14,6 @@ export function resolveEffectiveRole(email, role) {
     }
     return role || null;
 }
-
 async function resolveCompanyTenantId(user, payload) {
     if (user?.tenant_id) {
         console.log("[tenant] using users.tenant_id", user.tenant_id);

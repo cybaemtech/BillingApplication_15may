@@ -1370,24 +1370,31 @@ function SoftwareSection() {
                 <div className="flex items-center gap-2 text-amber-700">
                   <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
                   <span className="text-sm font-bold uppercase tracking-wider">New Version Available</span>
+                  {updateInfo.behindCount > 0 && (
+                    <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-500/20 text-[10px] font-bold">
+                      {updateInfo.behindCount} {updateInfo.behindCount === 1 ? 'Commit' : 'Commits'} Behind
+                    </span>
+                  )}
                 </div>
 
-                <div className="mt-3 space-y-3">
+                <div className="mt-3 space-y-4">
                   <div>
-                    <p className="text-xs font-medium text-amber-800/70">Update Details:</p>
-                    <p className="mt-1 text-sm font-medium text-amber-900 line-clamp-2">
-                      {updateInfo.latest?.message || "Critical system updates and improvements."}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-4 text-[11px] text-amber-800/60 font-mono">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                      {updateInfo.latest?.hash?.substring(0, 7)}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                      {updateInfo.latest?.date ? new Date(updateInfo.latest.date).toLocaleDateString() : "Pending"}
+                    <p className="text-xs font-medium text-amber-800/70 mb-2">Update Changes:</p>
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                      {(updateInfo.changelog || [updateInfo.latest]).map((commit: any, idx: number) => (
+                        <div key={commit?.hash || idx} className="flex items-start gap-3 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/10 hover:bg-amber-500/10 transition-colors">
+                          <div className="mt-1 w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-amber-900 leading-snug truncate sm:whitespace-normal">
+                              {commit?.message || "Critical system updates."}
+                            </p>
+                            <div className="mt-1 flex items-center gap-3 text-[10px] text-amber-800/60 font-mono">
+                              <span>{commit?.hash?.substring(0, 7)}</span>
+                              <span>{commit?.date ? new Date(commit.date).toLocaleDateString() : ""}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -1403,7 +1410,7 @@ function SoftwareSection() {
                     ) : (
                       <HardDriveDownload className="mr-2 h-4 w-4" />
                     )}
-                    {updateMutation.isPending ? "Installing..." : "Install Update Now"}
+                    {updateMutation.isPending ? "Installing Update..." : "Install Update Now"}
                   </Button>
                 </div>
               </div>
