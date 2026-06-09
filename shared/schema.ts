@@ -551,6 +551,7 @@ export interface StockMovement {
 
 export interface DocumentSequence {
   id: string;
+  tenant_id?: string;
   document_type: string;
   prefix: string;
   next_number: number;

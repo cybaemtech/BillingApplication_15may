@@ -111,13 +111,13 @@ export default function Topbar({ onToggleSidebar }: TopbarProps) {
       </div>
 
       <div className="flex items-center gap-2">
-        <div className="hidden md:block relative">
+        {/* <div className="hidden md:block relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             placeholder="Quick search… (⌘K)"
             className="pl-8 h-8 w-56 text-xs bg-muted/50 border-transparent focus:border-border focus:bg-card"
           />
-        </div>
+        </div> */}
 
         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground relative">
           <Bell className="h-4 w-4" />
