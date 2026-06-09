@@ -73,7 +73,9 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-foreground tracking-tight font-display">Dashboard</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Financial overview</p>
+        <p className="text-sm text-muted-foreground mt-0.5">Financial overview for your business
+
+</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
