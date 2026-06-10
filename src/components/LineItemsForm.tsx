@@ -122,10 +122,10 @@ export function LineItemsForm({
     <div className="space-y-3">
       <Label>Line Items</Label>
 
-      <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">
-        <div className="col-span-4">Item</div>
+      <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <div className="col-span-3">Item</div>
         <div className="col-span-2">Qty</div>
-        <div className="col-span-3">Rate</div>
+        <div className="col-span-2">Rate</div>
         <div className="col-span-2">GST</div>
         <div className="col-span-2 text-right">Amount</div>
         <div className="col-span-1"></div>
@@ -133,9 +133,9 @@ export function LineItemsForm({
 
       {lineItems.map((li, i) => (
         <div key={i} className="grid grid-cols-12 gap-2 items-center">
-          <div className="col-span-4">
+          <div className="col-span-3">
             <Select value={li.item_id} onValueChange={(v) => updateLineItem(i, "item_id", v)}>
-              <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Select item" /></SelectTrigger>
+              <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Select item" /></SelectTrigger>
               <SelectContent>
                 <div className="sticky top-0 z-10 border-b border-border bg-popover p-2">
                   <div className="relative">
@@ -174,15 +174,15 @@ export function LineItemsForm({
               </SelectContent>
             </Select>
           </div>
-          <div className="col-span-1">
-            <Input className="h-9 text-xs" type="number" value={li.quantity} onChange={(e) => updateLineItem(i, "quantity", Number(e.target.value))} min={1} />
+          <div className="col-span-2">
+            <Input className="h-9 text-sm" type="number" value={li.quantity} onChange={(e) => updateLineItem(i, "quantity", Number(e.target.value))} min={1} />
           </div>
           <div className="col-span-2">
-            <Input className="h-9 text-xs" type="number" value={li.rate} onChange={(e) => updateLineItem(i, "rate", Number(e.target.value))} step="0.01" />
+            <Input className="h-9 text-sm" type="number" value={li.rate} onChange={(e) => updateLineItem(i, "rate", Number(e.target.value))} step="0.01" />
           </div>
           <div className="col-span-2">
             <Select value={li.tax_rate_id} onValueChange={(v) => updateLineItem(i, "tax_rate_id", v)}>
-              <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Tax" /></SelectTrigger>
+              <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Tax" /></SelectTrigger>
               <SelectContent>
                 {activeTaxRates.map((t: any) => (
                   <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
@@ -193,7 +193,7 @@ export function LineItemsForm({
           <div className="col-span-2 text-right">
             <p className="text-sm font-medium text-card-foreground">Rs{(li.amount + li.tax_amount).toLocaleString()}</p>
             {li.tax_amount > 0 && (
-              <p className="text-[10px] text-muted-foreground">Tax: Rs{li.tax_amount.toLocaleString()}</p>
+              <p className="text-xs text-muted-foreground">Tax: Rs{li.tax_amount.toLocaleString()}</p>
             )}
           </div>
           <div className="col-span-1 text-center">

@@ -20,7 +20,7 @@ export function CreateDialog({ title, buttonLabel, open, onOpenChange, children 
           {buttonLabel}
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
