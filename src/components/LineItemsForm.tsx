@@ -124,8 +124,8 @@ export function LineItemsForm({
 
       <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">
         <div className="col-span-4">Item</div>
-        <div className="col-span-1">Qty</div>
-        <div className="col-span-2">Rate</div>
+        <div className="col-span-2">Qty</div>
+        <div className="col-span-3">Rate</div>
         <div className="col-span-2">GST</div>
         <div className="col-span-2 text-right">Amount</div>
         <div className="col-span-1"></div>
