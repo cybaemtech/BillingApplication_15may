@@ -35,7 +35,7 @@ async function getCompanyInfo() {
   let company: any = {};
   let gst: any = {};
   let settings: any = {};
-  try { [company, gst, settings] = await Promise.all([companyApi.get(), gstSettingsApi.get(), invoiceSettingsApi.get()]); } catch {}
+  try { [company, gst, settings] = await Promise.all([companyApi.get(), gstSettingsApi.get(), invoiceSettingsApi.get()]); } catch { }
   return {
     name: company?.company_name || gst?.legal_name || gst?.trade_name || "Your Company",
     gstin: company?.gstin || gst?.gstin || "",
@@ -43,11 +43,19 @@ async function getCompanyInfo() {
     state: company?.state || gst?.state || "",
     phone: company?.phone || "",
     email: company?.email || "",
-    logoUrl: company?.logo_url || "",
+    logoUrl: company?.logo_url || gst?.logo_url || "",
     templateId: (settings?.template_id || "modern") as TemplateId,
     accentColor: settings?.accent_color || "#2563eb",
     footerText: settings?.footer_text || "Thank you for your business!",
   };
+}
+
+function printAdjustments() {
+  return `
+    *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important}
+    html,body{background:#fff}
+    img{display:block;max-width:100%}
+  `;
 }
 
 function getStandardHeaders(doc: PdfDocumentData) {
@@ -127,7 +135,7 @@ function modernTemplate(doc: PdfDocumentData, co: any): string {
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1f2937;font-size:13px}
 .page{width:210mm;min-height:297mm;padding:20mm;margin:0 auto;background:#fff}
-@media print{.page{padding:15mm;margin:0}@page{size:A4;margin:0}}
+ @media print{${printAdjustments()}.page{padding:15mm;margin:0}@page{size:A4;margin:0}}
 .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;padding-bottom:16px;border-bottom:3px solid ${co.accentColor}}
 .company h1{font-size:22px;color:${co.accentColor};margin-bottom:4px}
 .company p{color:#6b7280;font-size:12px;line-height:1.5}
@@ -152,8 +160,7 @@ thead th{background:#f3f4f6;padding:10px 8px;text-align:left;font-size:11px;text
 </style></head><body><div class="page">
 <div class="header">
   <div class="company">
-    ${co.logoUrl ? `<img src="${co.logoUrl}" style="max-height:50px;margin-bottom:8px" />` : ""}
-    <h1>${co.name}</h1>
+     ${co.logoUrl ? `<img src="${co.logoUrl}" alt="${co.name}" style="max-height:58px;max-width:220px;margin-bottom:8px;object-fit:contain" />` : `<h1>${co.name}</h1>`}
     ${co.gstin ? `<p>GSTIN: ${co.gstin}</p>` : ""}
     ${co.address ? `<p>${co.address}</p>` : ""}
     ${co.state ? `<p>${co.state}</p>` : ""}
@@ -201,7 +208,7 @@ function corporateTemplate(doc: PdfDocumentData, co: any): string {
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;font-size:13px}
 .page{width:210mm;min-height:297mm;padding:0;margin:0 auto;background:#fff}
-@media print{.page{margin:0}@page{size:A4;margin:0}}
+@media print{${printAdjustments()}.page{margin:0}@page{size:A4;margin:0}}
 .top-bar{background:${co.accentColor};color:#fff;padding:24px 30px;display:flex;justify-content:space-between;align-items:center}
 .top-bar h1{font-size:24px;letter-spacing:1px}
 .top-bar .doc-type{font-size:28px;font-weight:700;text-transform:uppercase;letter-spacing:2px}
@@ -252,7 +259,7 @@ function minimalTemplate(doc: PdfDocumentData, co: any): string {
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Courier New',monospace;color:#000;font-size:12px}
 .page{width:210mm;min-height:297mm;padding:25mm;margin:0 auto;background:#fff}
-@media print{.page{padding:20mm;margin:0}@page{size:A4;margin:0}}
+@media print{${printAdjustments()}.page{padding:20mm;margin:0}@page{size:A4;margin:0}}
 h1{font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:3px;margin-bottom:4px}
 .meta{font-size:11px;color:#666;margin-bottom:30px}
 .divider{border:none;border-top:1px solid #000;margin:20px 0}
@@ -291,7 +298,7 @@ function gstDetailedTemplate(doc: PdfDocumentData, co: any): string {
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:Arial,sans-serif;color:#1f2937;font-size:12px}
 .page{width:210mm;min-height:297mm;padding:15mm;margin:0 auto;background:#fff}
-@media print{.page{padding:10mm;margin:0}@page{size:A4;margin:0}}
+@media print{${printAdjustments()}.page{padding:10mm;margin:0}@page{size:A4;margin:0}}
 .header{border:2px solid #1f2937;padding:16px;display:flex;justify-content:space-between;margin-bottom:16px}
 .header h1{font-size:20px}
 .header .right{text-align:right}
@@ -344,7 +351,7 @@ function compactTemplate(doc: PdfDocumentData, co: any): string {
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:Arial,sans-serif;color:#000;font-size:11px}
 .page{width:80mm;padding:8mm;margin:0 auto;background:#fff}
-@media print{.page{padding:5mm;margin:0}@page{size:80mm auto;margin:0}}
+@media print{${printAdjustments()}.page{padding:5mm;margin:0}@page{size:80mm auto;margin:0}}
 h1{font-size:14px;text-align:center;margin-bottom:2px}
 .center{text-align:center}
 .divider{border:none;border-top:1px dashed #999;margin:8px 0}
@@ -392,7 +399,22 @@ export async function printDocument(doc: PdfDocumentData, templateOverride?: Tem
   if (!printWindow) return;
   printWindow.document.write(html);
   printWindow.document.close();
-  printWindow.onload = () => { printWindow.print(); };
+  printWindow.onload = async () => {
+    try {
+      const images = Array.from(printWindow.document.images || []);
+      await Promise.all(images.map((img) => (
+        img.complete ? Promise.resolve() : new Promise<void>((resolve) => {
+          img.onload = () => resolve();
+          img.onerror = () => resolve();
+        })
+      )));
+      await (printWindow.document as any).fonts?.ready;
+    } catch {
+      // Continue even if font/image readiness APIs are unavailable.
+    }
+    printWindow.focus();
+    printWindow.print();
+  };
 }
 
 export function shareWhatsApp(doc: { documentNumber: string; type: string; total: number; partyName: string }) {

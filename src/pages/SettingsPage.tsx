@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { Building2, Users, Receipt, FileText, ArrowLeft, Trash2, Star, Edit2, ShieldCheck, CreditCard, Loader2, Database, Gauge, LockKeyhole, Shield, HardDriveDownload, UserCog, CircleDashed, Rocket, Monitor, Search, Plus, RefreshCcw } from "lucide-react";
+import { Building2, Users, Receipt, FileText, ArrowLeft, Trash2, Star, Edit2, ShieldCheck, CreditCard, Loader2, Database, Gauge, LockKeyhole, Shield, HardDriveDownload, UserCog, CircleDashed, Rocket, Monitor, Search, Plus, RefreshCcw, Upload, Image as ImageIcon, X } from "lucide-react";
 import { adminUsersApi, featureAccessApi, gstSettingsApi, taxRatesApi, documentSequencesApi, userRolesApi, companyApi, invoiceSettingsApi, subscriptionApi, customersApi, invoicesApi, rolesApi, softwareApi } from "@/lib/api";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -379,10 +379,18 @@ function OrganizationSection() {
   const { userRole } = useAuth();
   const isAdmin = isAdminRole(userRole);
   const { data: gst, isLoading } = useQuery({ queryKey: ["gst_settings"], queryFn: gstSettingsApi.get });
+  const { data: company } = useQuery({ queryKey: ["company"], queryFn: companyApi.get });
   const [form, setForm] = useState<any>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentForm = form || gst || {};
   const updateField = (field: string, value: any) => setForm({ ...currentForm, [field]: value });
+  const updateLogo = (logo_url: string) => setForm({ ...currentForm, logo_url });
+  const clearLogo = () => setForm({ ...currentForm, logo_url: "" });
+
+  useEffect(() => {
+    if (!form && gst) setForm(gst);
+  }, [gst, form]);
 
   const saveMutation = useMutation({
     mutationFn: (data: any) => gstSettingsApi.upsert(data),
@@ -399,17 +407,89 @@ function OrganizationSection() {
     <div>
       <h2 className="text-lg font-semibold text-foreground mb-4 font-display">Organization Settings</h2>
       {!isAdmin && <ReadOnlyNote />}
-      <div className="bg-card border border-border rounded-xl p-6 space-y-4 max-w-lg">
-        <div className="space-y-2"><Label>Legal Name</Label><Input value={currentForm.legal_name || ""} onChange={e => updateField("legal_name", e.target.value)} disabled={!isAdmin} /></div>
-        <div className="space-y-2"><Label>Trade Name</Label><Input value={currentForm.trade_name || ""} onChange={e => updateField("trade_name", e.target.value)} disabled={!isAdmin} /></div>
-        <div className="space-y-2"><Label>GSTIN</Label><Input value={currentForm.gstin || ""} onChange={e => updateField("gstin", e.target.value)} placeholder="22AAAAA0000A1Z5" disabled={!isAdmin} /></div>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2"><Label>State</Label><Input value={currentForm.state || ""} onChange={e => updateField("state", e.target.value)} disabled={!isAdmin} /></div>
-          <div className="space-y-2"><Label>State Code</Label><Input value={currentForm.state_code || ""} onChange={e => updateField("state_code", e.target.value)} disabled={!isAdmin} /></div>
+      <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="bg-card border border-border rounded-xl p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2"><Label>Legal Name</Label><Input value={currentForm.legal_name || ""} onChange={e => updateField("legal_name", e.target.value)} disabled={!isAdmin} /></div>
+            <div className="space-y-2"><Label>Trade Name</Label><Input value={currentForm.trade_name || ""} onChange={e => updateField("trade_name", e.target.value)} disabled={!isAdmin} /></div>
+          </div>
+          <div className="space-y-2"><Label>GSTIN</Label><Input value={currentForm.gstin || ""} onChange={e => updateField("gstin", e.target.value)} placeholder="22AAAAA0000A1Z5" disabled={!isAdmin} /></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2"><Label>State</Label><Input value={currentForm.state || ""} onChange={e => updateField("state", e.target.value)} disabled={!isAdmin} /></div>
+            <div className="space-y-2"><Label>State Code</Label><Input value={currentForm.state_code || ""} onChange={e => updateField("state_code", e.target.value)} disabled={!isAdmin} /></div>
+          </div>
+          <div className="rounded-xl border border-dashed border-border bg-muted/30 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-card-foreground">Company Logo</p>
+                <p className="text-xs text-muted-foreground">Upload a logo to show it on invoices and PDFs.</p>
+              </div>
+              {isAdmin && (
+                <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                  <Upload className="w-4 h-4 mr-2" /> Upload
+                </Button>
+              )}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              disabled={!isAdmin}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = () => updateLogo(String(reader.result || ""));
+                reader.readAsDataURL(file);
+                e.target.value = "";
+              }}
+            />
+            <div className="flex items-center gap-4">
+              <div className="h-20 w-20 rounded-xl border border-border bg-background overflow-hidden flex items-center justify-center">
+                {currentForm.logo_url ? (
+                  <img src={currentForm.logo_url} alt="Company logo preview" className="h-full w-full object-contain p-2" />
+                ) : (
+                  <ImageIcon className="w-8 h-8 text-muted-foreground" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-card-foreground">Preview</p>
+                <p className="text-xs text-muted-foreground break-all mt-1">{currentForm.logo_url ? "Logo ready to save." : "No logo uploaded yet."}</p>
+                {isAdmin && currentForm.logo_url && (
+                  <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-destructive mt-2" onClick={clearLogo}>
+                    <X className="w-4 h-4 mr-1" /> Remove
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+          <Button onClick={() => saveMutation.mutate({ ...currentForm, logo_url: currentForm.logo_url || null })} disabled={saveMutation.isPending || !isAdmin}>
+            {saveMutation.isPending ? "Saving..." : "Save Settings"}
+          </Button>
         </div>
-        <Button onClick={() => saveMutation.mutate(currentForm)} disabled={saveMutation.isPending || !isAdmin}>
-          {saveMutation.isPending ? "Saving..." : "Save Settings"}
-        </Button>
+
+        <div className="bg-card border border-border rounded-xl p-6 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold text-card-foreground">Live Branding Preview</h3>
+            <p className="text-xs text-muted-foreground mt-1">This reflects how the stored company branding will appear.</p>
+          </div>
+          <div className="rounded-xl border border-border overflow-hidden bg-white">
+            <div className="bg-primary text-primary-foreground px-4 py-3">
+              {currentForm.logo_url || company?.logo_url ? (
+                <img src={currentForm.logo_url || company?.logo_url} alt="Company logo" className="max-h-12 max-w-[220px] object-contain" />
+              ) : (
+                <p className="text-lg font-bold truncate">{currentForm.trade_name || currentForm.legal_name || company?.company_name || "Company Name"}</p>
+              )}
+            </div>
+            <div className="p-4 text-sm space-y-2">
+              <div className="flex justify-between gap-3"><span className="text-muted-foreground">Legal Name</span><span className="font-medium text-right">{currentForm.legal_name || "-"}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-muted-foreground">Trade Name</span><span className="font-medium text-right">{currentForm.trade_name || "-"}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-muted-foreground">GSTIN</span><span className="font-medium text-right">{currentForm.gstin || "-"}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-muted-foreground">State</span><span className="font-medium text-right">{currentForm.state || "-"}</span></div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
