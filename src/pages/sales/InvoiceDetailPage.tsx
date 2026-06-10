@@ -78,6 +78,11 @@ export default function InvoiceDetailPage() {
   });
 
   const outstandingAmount = Number(invoice?.balance_due || invoice?.balanceDue || 0);
+  const clampPaymentAmount = (value: string) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return "";
+    return String(Math.min(Math.max(numeric, 0), outstandingAmount));
+  };
   const normalizedStatus = invoice?.status === "partially_paid" ? "partial" : (invoice?.status || "draft");
 
   return (
@@ -146,10 +151,11 @@ export default function InvoiceDetailPage() {
                 <Input
                   type="number"
                   step="0.01"
+                  min="0.01"
+                  max={outstandingAmount > 0 ? String(outstandingAmount) : undefined}
                   required
                   value={amount}
-                  max={outstandingAmount > 0 ? String(outstandingAmount) : undefined}
-                  onChange={(event) => setAmount(event.target.value)}
+                  onChange={(event) => setAmount(clampPaymentAmount(event.target.value))}
                 />
               </div>
               <div className="space-y-2">

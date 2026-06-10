@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { LineItemsForm, emptyLineItem } from "@/components/LineItemsForm";
 import type { LineItem } from "@/components/LineItemsForm";
 import { generatePdfHtml, printDocument, shareWhatsApp, TEMPLATES, type PdfDocumentData } from "@/lib/pdf";
+import { paymentsReceivedApi, paymentsMadeApi } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Save, Printer, FileText, Send, MessageCircle, Eye, EyeOff, Pencil, Plus } from "lucide-react";
 
@@ -144,6 +145,16 @@ export default function DocumentEditorPage({ docType }: DocumentEditorPageProps)
     queryFn: () => getDocApi()?.get(id!),
     enabled: isEditMode && !!apis,
   });
+  const { data: receivedPayments = [] } = useQuery({
+    queryKey: ["payments_received"],
+    queryFn: () => paymentsReceivedApi.list(),
+    enabled: isEditMode && !!apis && docType === "invoice",
+  });
+  const { data: madePayments = [] } = useQuery({
+    queryKey: ["payments_made"],
+    queryFn: () => paymentsMadeApi.list(),
+    enabled: isEditMode && !!apis && docType === "bill",
+  });
 
   // Populate form for edit mode
   useEffect(() => {
@@ -194,6 +205,21 @@ export default function DocumentEditorPage({ docType }: DocumentEditorPageProps)
   const subtotal = validItems.reduce((s, li) => s + li.amount, 0);
   const taxTotal = validItems.reduce((s, li) => s + li.tax_amount, 0);
   const grandTotal = subtotal + taxTotal;
+  const existingPaymentsTotal = useMemo(() => {
+    if (!isEditMode || !id) return 0;
+    if (docType === "invoice") {
+      return (receivedPayments as any[])
+        .filter((p) => String(p.invoice_id || "") === String(id))
+        .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    }
+    if (docType === "bill") {
+      return (madePayments as any[])
+        .filter((p) => String(p.bill_id || "") === String(id))
+        .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    }
+    return 0;
+  }, [docType, id, isEditMode, receivedPayments, madePayments]);
+  const adjustedBalanceDue = Math.max(0, grandTotal - existingPaymentsTotal);
 
   const pdfData: PdfDocumentData = useMemo(() => ({
     type: config.title,
@@ -281,7 +307,7 @@ export default function DocumentEditorPage({ docType }: DocumentEditorPageProps)
 
     if (docType === "invoice" || docType === "bill") {
       docData.due_date = dueDate;
-      docData.balance_due = grandTotal;
+      docData.balance_due = adjustedBalanceDue;
     }
 
     if (isEditMode) {

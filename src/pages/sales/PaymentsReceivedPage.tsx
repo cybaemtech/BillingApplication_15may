@@ -46,6 +46,12 @@ export default function PaymentsReceivedPage() {
     [invoices, selectedCustomer],
   );
   const selectedInvoiceRecord = unpaidInvoices.find((inv: any) => inv.id === selectedInvoice);
+  const outstandingAmount = Number(selectedInvoiceRecord?.balance_due || 0);
+  const clampAmount = (value: string) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return "";
+    return String(Math.min(Math.max(numeric, 0), outstandingAmount));
+  };
 
   const createMutation = useMutation({
     mutationFn: paymentsReceivedApi.create,
@@ -138,7 +144,16 @@ export default function PaymentsReceivedPage() {
 
             <div className="space-y-2">
               <Label>Amount *</Label>
-              <Input name="amount" type="number" step="0.01" required value={amount} onChange={(event) => setAmount(event.target.value)} />
+              <Input
+                name="amount"
+                type="number"
+                step="0.01"
+                min="0.01"
+                max={outstandingAmount > 0 ? String(outstandingAmount) : undefined}
+                required
+                value={amount}
+                onChange={(event) => setAmount(clampAmount(event.target.value))}
+              />
             </div>
             <div className="space-y-2">
               <Label>Payment Mode</Label>
@@ -153,7 +168,7 @@ export default function PaymentsReceivedPage() {
             </div>
             <div className="space-y-2"><Label>Reference Number</Label><Input name="reference_number" /></div>
             <div className="space-y-2"><Label>Notes</Label><Input name="notes" /></div>
-            <Button type="submit" className="w-full" disabled={createMutation.isPending || !selectedCustomer || Number(amount || 0) <= 0}>
+            <Button type="submit" className="w-full" disabled={createMutation.isPending || !selectedCustomer || Number(amount || 0) <= 0 || Number(amount || 0) > outstandingAmount}>
               {createMutation.isPending ? "Recording..." : "Record Payment"}
             </Button>
           </form>
