@@ -753,7 +753,7 @@ function UsersSection() {
   const cybaemtechUsers = filteredRoles.filter((r: any) => {
     return Boolean(r.is_cybaemtech_team) && r.is_active !== false;
   });
-  const platformAdmins = filteredRoles.filter((r: any) => (r.role || "").toLowerCase() === "admin" && r.is_active !== false);
+  const platformAdmins = filteredRoles.filter((r: any) => (r.role || "").toLowerCase() === "admin");
   const cybaemtechSelectableIds = cybaemtechUsers
     .map((r: any) => String(r.user_id))
     .filter((id: string) => id && id !== String(user?.id || ""));
