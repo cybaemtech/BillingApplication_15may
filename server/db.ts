@@ -392,6 +392,35 @@ async function ensureTenantIdColumns() {
   }
 }
 
+async function ensureJournalEntriesConstraint() {
+  const p = await getPool();
+  console.log("[db:init] Ensuring journal_entries unique constraint is organization-specific");
+  try {
+    await p.request().batch(`
+      IF COL_LENGTH('journal_entries', 'tenant_id') IS NULL
+      BEGIN
+        ALTER TABLE journal_entries ADD tenant_id UNIQUEIDENTIFIER NULL;
+      END
+
+      IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = 'UQ_journal_entries_doc_number' AND type = 'UQ')
+      BEGIN
+        ALTER TABLE dbo.journal_entries DROP CONSTRAINT UQ_journal_entries_doc_number;
+      END
+      ELSE IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UQ_journal_entries_doc_number' AND is_unique_constraint = 0 AND object_id = OBJECT_ID('dbo.journal_entries'))
+      BEGIN
+        DROP INDEX UQ_journal_entries_doc_number ON dbo.journal_entries;
+      END
+
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UQ_journal_entries_tenant_doc' AND object_id = OBJECT_ID('dbo.journal_entries'))
+      BEGIN
+        CREATE UNIQUE INDEX UQ_journal_entries_tenant_doc ON dbo.journal_entries(tenant_id, document_number) WHERE tenant_id IS NOT NULL;
+      END
+    `);
+  } catch (err: any) {
+    console.error("[db:init] Error ensuring journal_entries constraint:", err.message);
+  }
+}
+
 export async function initializeDb() {
   try {
     await getPool();
@@ -399,6 +428,7 @@ export async function initializeDb() {
     await ensureSubscriptionSchema();
     await ensureFeatureAccessSchema();
     await ensureTenantIdColumns();
+    await ensureJournalEntriesConstraint();
     console.log("Connected to MSSQL database:", dbConfig.database);
     return true;
   } catch (err) {

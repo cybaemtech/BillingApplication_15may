@@ -34,7 +34,6 @@ export default function JournalEntriesPage() {
 
   const createMutation = useMutation({
     mutationFn: () => journalEntriesApi.create({ 
-      document_number: `JE-${Date.now()}`,
       date: entryDate, 
       description, 
       journal_type: journalType 
