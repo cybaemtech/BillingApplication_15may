@@ -302,7 +302,7 @@ export default function DocumentEditorPage({ docType }: DocumentEditorPageProps)
       subtotal,
       tax_amount: taxTotal,
       total: grandTotal,
-      notes, terms,
+      notes, ...(docType !== "purchase_order" && docType !== "bill" ? { terms } : {}),
     };
 
     if (docType === "invoice" || docType === "bill") {
