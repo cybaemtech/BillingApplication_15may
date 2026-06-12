@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
@@ -33,6 +33,24 @@ export default function ChartOfAccountsPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { data: accounts = [], isLoading } = useQuery({ queryKey: ["accounts"], queryFn: accountsApi.list });
+
+  useEffect(() => {
+    if (open) {
+      const typeAccounts = accounts.filter((a: any) => a.account_type === accountType);
+      let nextCode = "";
+      if (typeAccounts.length > 0) {
+        const codes = typeAccounts.map((a: any) => parseInt(a.code, 10)).filter((c: number) => !isNaN(c));
+        if (codes.length > 0) {
+          nextCode = String(Math.max(...codes) + 1);
+        }
+      }
+      if (!nextCode) {
+        const base: Record<string, string> = { asset: "1000", liability: "2000", equity: "3000", income: "4000", expense: "5000" };
+        nextCode = base[accountType] || "1000";
+      }
+      setCode(nextCode);
+    }
+  }, [open, accountType, accounts]);
 
   const createMutation = useMutation({
     mutationFn: () => accountsApi.create({

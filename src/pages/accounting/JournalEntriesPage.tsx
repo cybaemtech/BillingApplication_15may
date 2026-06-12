@@ -33,7 +33,12 @@ export default function JournalEntriesPage() {
   const { data: accounts = [] } = useQuery({ queryKey: ["accounts"], queryFn: accountsApi.list });
 
   const createMutation = useMutation({
-    mutationFn: () => journalEntriesApi.create({ date: entryDate, description, journal_type: journalType }, lines.map((line) => ({
+    mutationFn: () => journalEntriesApi.create({ 
+      document_number: `JE-${Date.now()}`,
+      date: entryDate, 
+      description, 
+      journal_type: journalType 
+    }, lines.map((line) => ({
       account_id: line.account_id,
       debit: Number(line.debit || 0),
       credit: Number(line.credit || 0),
