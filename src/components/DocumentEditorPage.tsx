@@ -435,10 +435,12 @@ export default function DocumentEditorPage({ docType }: DocumentEditorPageProps)
             <Textarea className="text-sm resize-none" rows={2} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Internal notes..." />
           </div>
 
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Terms & Conditions</Label>
-            <Textarea className="text-sm resize-none" rows={2} value={terms} onChange={e => setTerms(e.target.value)} placeholder="Terms..." />
-          </div>
+          {docType !== "purchase_order" && docType !== "bill" && (
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Terms & Conditions</Label>
+              <Textarea className="text-sm resize-none" rows={2} value={terms} onChange={e => setTerms(e.target.value)} placeholder="Terms..." />
+            </div>
+          )}
 
           {/* Summary */}
           <div className="border-t border-border pt-4 space-y-2">
